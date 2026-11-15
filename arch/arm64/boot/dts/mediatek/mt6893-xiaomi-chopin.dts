@@ -708,12 +708,13 @@
 			compatible = "mediatek,dramc-rk0";
 		};
 
-		zone-movable-cma-memory {
-			alloc-ranges = <0x00 0xc0000000 0x04 0x00>;
-			alignment = <0x0 0x1000000>;
-			size = <0x0 0x35000000>;
-			compatible = "mediatek,zone_movable_cma";
-		};
+		/*
+		 * zone-movable-cma-memory (848 MiB) is Android-only: the vendor
+		 * kernel's "mediatek,zone_movable_cma" parser turns it into
+		 * ZONE_MOVABLE so ION buffers can be migrated.  Nothing in this
+		 * tree claims that compatible, so of_reserved_mem just memblocks
+		 * the 848 MiB away - 848 MiB of the RAM a 6 GiB unit is missing.
+		 */
 
 		reserve-memory-dram_r1_dummy_read {
 			alloc-ranges = <0x01 0x40000000 0x00 0xfffff000>;
