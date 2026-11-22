@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * op6893 21651 with the modem resource owners enabled.
+ *
+ * The shared board file keeps every modem node disabled so a normal image
+ * cannot power, reset or talk to the modem by accident. This variant enables
+ * exactly the owners a staged bring-up needs and nothing else, so the plain
+ * 21651 tree stays the safe default.
+ */
+#include "mt6893-op6893-21651-boot.dts"
+
+/*
+ * Only one owner may snapshot the LK tag buffer, so the metadata-only node
+ * hands over to the platform owner here.
+ */
+&{/modem-handoff} {
+	status = "disabled";
+};
+
+/* Supplies for the cold platform owner. */
+&mt6315_3 {
+	status = "okay";
+};
+
+&mt6359_vpu {
+	status = "okay";
+};
+
+/* MD1 domain; the platform driver attaches it instead of platform-bus probe. */
+&md1 {
+	status = "okay";
+};
+
+/* Cold platform owner: supplies, CCIF clocks and the MD1 domain. */
+&{/modem-platform@10209000} {
+	status = "okay";
+};
+
+/* SCP owner, observation windows and the CCISM bridge. */
+&{/scp-resource-hold@10724000} {
+	status = "okay";
+};
+
+&{/scp-observe@10730000} {
+	status = "okay";
+};
+
+/* DPMAIF data transport. */
+&{/dpmaif@10014000} {
+	status = "okay";
+};

@@ -25,7 +25,7 @@
 #define MT6893_TOP_AXI_PROT_EN_2_MFG1_STEP2			GENMASK(6, 5)
 #define MT6893_TOP_AXI_PROT_EN_MFG1_STEP3			GENMASK(22, 21)
 #define MT6893_TOP_AXI_PROT_EN_2_MFG1_STEP4			BIT(7)
-#define MT6893_TOP_AXI_PROT_EN_SUB_INFRA_VDNR_MFG1_STEP5	GENMASK(19, 17)
+#define MT6893_TOP_AXI_PROT_EN_SUB_INFRA_VDNR_MFG1_STEP5	(BIT(19) | BIT(17))
 #define MT6893_TOP_AXI_PROT_EN_MM_VDEC0_STEP1			BIT(24)
 #define MT6893_TOP_AXI_PROT_EN_MM_2_VDEC0_STEP2			BIT(25)
 #define MT6893_TOP_AXI_PROT_EN_MM_VDEC1_STEP1			BIT(6)
@@ -574,6 +574,14 @@ static const struct scpsys_domain_data scpsys_domain_data_mt6893[] = {
 		.sram_pdn_bits = BIT(8),
 		.sram_pdn_ack_bits = BIT(12),
 		.caps = MTK_SCPD_KEEP_DEFAULT_OFF,
+	},
+	[MT6893_POWER_DOMAIN_MD1] = {
+		.name = "md1",
+		.sta_mask = BIT(0),
+		.ctl_offs = 0x300,
+		.pwr_sta_offs = 0x16c,
+		.pwr_sta2nd_offs = 0x16c,
+		.caps = MTK_SCPD_KEEP_DEFAULT_OFF | MTK_SCPD_MT6893_MD_PWRSEQ,
 	},
 };
 

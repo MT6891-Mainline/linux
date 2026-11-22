@@ -2617,6 +2617,18 @@ config ARM64_OP6893_FBKICK
 	bool "OP6893 early framebuffer using the LK display handoff"
 	depends on ARM64_OP6893_BRINGUP && FB
 
+config ARM64_OP6893_21651_MODEM
+	bool "Enable the op6893 21651 modem resource owners"
+	depends on ARM64_OP6893_21651
+	help
+	  Use the 21651 tree that also enables the modem resource owners: the
+	  MD1 power domain, its PMIC supplies, the cold platform owner, the SCP
+	  owner and DPMAIF. The plain 21651 tree keeps them disabled so an image
+	  without the corresponding drivers cannot power or reset the modem.
+	  Only one owner may snapshot the LK tag buffer, so this tree disables
+	  the metadata-only handoff node. Select it only for an explicit modem
+	  bring-up image.
+
 endmenu # "Boot options"
 
 menu "Power management options"
