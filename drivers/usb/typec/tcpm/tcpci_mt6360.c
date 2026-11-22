@@ -8,9 +8,12 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <linux/usb/role.h>
 #include <linux/usb/tcpci.h>
 #include <linux/usb/tcpm.h>
@@ -41,6 +44,10 @@ struct mt6360_tcpc_info {
 	struct tcpci_data tdata;
 	struct tcpci *tcpci;
 	struct device *dev;
+	struct regulator *vbus;
+	struct mutex vbus_lock;
+	bool sourcing;
+	bool shutting_down;
 	int irq;
 };
 
@@ -151,6 +158,75 @@ static int mt6360_tcpc_init(struct tcpci *tcpci, struct tcpci_data *tdata)
 	return regmap_write(regmap, MT6360_REG_MODECTRL2, 0x7A);
 }
 
+static int mt6360_tcpc_update_vbus(struct mt6360_tcpc_info *mti, bool source, bool sink)
+{
+	struct tcpci_data *tdata = &mti->tdata;
+	unsigned int status;
+	int ret;
+
+	if (source && sink)
+		return -EINVAL;
+
+	if (mti->sourcing && !source) {
+		ret = regulator_disable(mti->vbus);
+		if (ret)
+			goto err;
+
+		mti->sourcing = false;
+	}
+
+	/* Keep the TCPC's own source path off with an external VBUS supply. */
+	ret = regmap_write(tdata->regmap, TCPC_COMMAND, TCPC_CMD_DISABLE_SRC_VBUS);
+	if (ret)
+		goto err;
+
+	ret = regmap_write(tdata->regmap, TCPC_COMMAND,
+			   sink ? TCPC_CMD_SINK_VBUS : TCPC_CMD_DISABLE_SINK_VBUS);
+	if (ret)
+		goto err;
+
+	if (source && !mti->sourcing) {
+		ret = regmap_read(tdata->regmap, TCPC_POWER_STATUS, &status);
+		if (ret)
+			goto err;
+
+		if (status & TCPC_POWER_STATUS_VBUS_PRES) {
+			ret = -EBUSY;
+			goto err;
+		}
+
+		ret = regulator_enable(mti->vbus);
+		if (ret)
+			goto err;
+
+		mti->sourcing = true;
+	}
+
+	/* Skip the generic TCPCI VBUS commands. */
+	return 1;
+
+err:
+	dev_err_ratelimited(mti->dev, "VBUS transition failed (source=%d, sink=%d): %d\n",
+			    source, sink, ret);
+	return ret;
+}
+
+static int mt6360_tcpc_set_vbus(struct tcpci *tcpci, struct tcpci_data *tdata,
+			       bool source, bool sink)
+{
+	struct mt6360_tcpc_info *mti = container_of(tdata, struct mt6360_tcpc_info, tdata);
+	int ret;
+
+	mutex_lock(&mti->vbus_lock);
+	if (mti->shutting_down)
+		ret = -ESHUTDOWN;
+	else
+		ret = mt6360_tcpc_update_vbus(mti, source, sink);
+	mutex_unlock(&mti->vbus_lock);
+
+	return ret;
+}
+
 static irqreturn_t mt6360_irq(int irq, void *dev_id)
 {
 	struct mt6360_tcpc_info *mti = dev_id;
@@ -180,6 +256,15 @@ static int mt6360_tcpc_probe(struct platform_device *pdev)
 		return mti->irq;
 
 	mti->tdata.init = mt6360_tcpc_init;
+	if (device_property_present(&pdev->dev, "vbus-source-supply")) {
+		mti->vbus = devm_regulator_get_optional(&pdev->dev, "vbus-source");
+		if (IS_ERR(mti->vbus))
+			return dev_err_probe(&pdev->dev, PTR_ERR(mti->vbus),
+					     "Could not get external VBUS supply\n");
+
+		mutex_init(&mti->vbus_lock);
+		mti->tdata.set_vbus = mt6360_tcpc_set_vbus;
+	}
 
 	mti->tcpci = tcpci_register_port(&pdev->dev, &mti->tdata);
 	if (IS_ERR(mti->tcpci)) {
@@ -210,7 +295,8 @@ static int mt6360_tcpc_probe(struct platform_device *pdev)
 	{
 		u16 mask = TCPC_ALERT_TX_SUCCESS | TCPC_ALERT_TX_FAILED |
 			   TCPC_ALERT_TX_DISCARDED | TCPC_ALERT_RX_STATUS |
-			   TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS;
+			   TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS |
+			   TCPC_ALERT_POWER_STATUS;
 
 		ret = mti->tdata.regmap ? mt6360_tcpc_write16(mti->tdata.regmap,
 							TCPC_ALERT_MASK, mask) : -ENODEV;
@@ -233,6 +319,27 @@ static void mt6360_tcpc_remove(struct platform_device *pdev)
 
 	disable_irq(mti->irq);
 	tcpci_unregister_port(mti->tcpci);
+}
+
+static void mt6360_tcpc_shutdown(struct platform_device *pdev)
+{
+	struct mt6360_tcpc_info *mti = platform_get_drvdata(pdev);
+	int ret;
+
+	if (!mti->vbus)
+		return;
+
+	mutex_lock(&mti->vbus_lock);
+	mti->shutting_down = true;
+	if (mti->sourcing) {
+		ret = regulator_disable(mti->vbus);
+		if (ret)
+			dev_err(mti->dev, "Failed to disable external VBUS at shutdown: %d\n",
+				ret);
+		else
+			mti->sourcing = false;
+	}
+	mutex_unlock(&mti->vbus_lock);
 }
 
 static int __maybe_unused mt6360_tcpc_suspend(struct device *dev)
@@ -271,6 +378,7 @@ static struct platform_driver mt6360_tcpc_driver = {
 	},
 	.probe = mt6360_tcpc_probe,
 	.remove = mt6360_tcpc_remove,
+	.shutdown = mt6360_tcpc_shutdown,
 };
 module_platform_driver(mt6360_tcpc_driver);
 

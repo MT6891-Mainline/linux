@@ -24,7 +24,7 @@ struct panfrost_job_slot;
 struct panfrost_job;
 struct panfrost_perfcnt;
 
-#define MAX_PM_DOMAINS 5
+#define MAX_PM_DOMAINS 6
 
 #define ALL_JS_INT_MASK					\
 	(GENMASK(16 + NUM_JOB_SLOTS - 1, 16) |		\
@@ -96,6 +96,8 @@ struct panfrost_features {
  * compatible string, typically SoC-specific.
  */
 struct panfrost_compatible {
+	bool chopin_power;
+	bool needs_jm_reset;
 	/* Supplies count and names. */
 	int num_supplies;
 	const char * const *supply_names;

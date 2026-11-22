@@ -368,6 +368,21 @@ void mtu3_start(struct mtu3 *mtu)
 
 	mtu3_dev_power_on(mtu);
 	mtu3_csr_init(mtu);
+	/* Restore the ACK VBUS indication while the gadget is active. */
+	if (IS_ENABLED(CONFIG_ARM64_OP6893_BRINGUP) &&
+	    of_machine_is_compatible("realme,op6893") &&
+	    (mtu->ssusb->dr_mode == USB_DR_MODE_PERIPHERAL ||
+	     IS_ENABLED(CONFIG_ARM64_OP6893_21651_USB_DRD))) {
+		mtu3_clrbits(mtu->ippc_base, SSUSB_U2_CTRL(0),
+			     SSUSB_U2_PORT_OTG_SEL);
+		mtu3_setbits(mbase, U3D_MISC_CTRL, VBUS_FRC_EN | VBUS_ON);
+		/* The shared IP reset on host entry clears the queue format. */
+		if (mtu->ssusb->dr_mode == USB_DR_MODE_OTG && mtu->gen2cp)
+			mtu3_writel(mbase, U3D_QFCR, ~0x0);
+		dev_info(mtu->dev, "op6893: forced VBUS, misc=%#x u2ctl=%#x\n",
+			 mtu3_readl(mbase, U3D_MISC_CTRL),
+			 mtu3_readl(mtu->ippc_base, SSUSB_U2_CTRL(0)));
+	}
 	mtu3_set_speed(mtu, mtu->speed);
 
 	/* Initialize the default interrupts */
@@ -384,8 +399,22 @@ void mtu3_stop(struct mtu3 *mtu)
 
 	mtu3_intr_disable(mtu);
 
-	if (mtu->softconnect)
+	if (mtu->softconnect) {
 		mtu3_dev_on_off(mtu, 0);
+		/*
+		 * In OTG mode the gadget stays bound while the host owns
+		 * the port. Keep the pullup request for mtu3_start().
+		 */
+		if (mtu->ssusb->dr_mode == USB_DR_MODE_OTG)
+			mtu->softconnect = 1;
+	}
+
+	if (IS_ENABLED(CONFIG_ARM64_OP6893_21651_USB_DRD) &&
+	    of_machine_is_compatible("realme,op6893") &&
+	    mtu->ssusb->dr_mode == USB_DR_MODE_OTG) {
+		mtu3_clrbits(mtu->mac_base, U3D_MISC_CTRL, VBUS_FRC_EN | VBUS_ON);
+		mtu3_setbits(mtu->ippc_base, SSUSB_U2_CTRL(0), SSUSB_U2_PORT_OTG_SEL);
+	}
 
 	mtu->is_active = 0;
 	mtu3_dev_power_down(mtu);

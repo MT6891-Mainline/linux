@@ -92,8 +92,46 @@ endif
 subdir- += vdso vdso32
 
 # The board device tree, embedded in the kernel image (see chopin-dtb.S).
-obj-y += chopin-dtb.o
+obj-$(CONFIG_ARM64_CHOPIN_LK_BOOT) += chopin-dtb.o
 # Build a private copy via the standard DTC rules, including DTS dependencies.
 # This also keeps parallel Image and dtbs builds from writing the same file.
 targets += chopin-board.dtb
 $(obj)/chopin-dtb.o: $(obj)/chopin-board.dtb
+
+obj-$(CONFIG_ARM64_OP6893_BRINGUP) += op6893-boot.o op6893-fdt.o op6893-dtb.o
+obj-$(CONFIG_ARM64_OP6893_CONN_PREFLIGHT) += op6893-conn.o
+obj-$(CONFIG_ARM64_OP6893_FBKICK) += op6893-fbkick.o
+
+op6893-boot-dts := mt6893-op6893-boot.dts
+ifeq ($(CONFIG_ARM64_OP6893_21651),y)
+op6893-boot-dts := mt6893-op6893-21651-boot.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_TYPEC_SINK),y)
+op6893-boot-dts := mt6893-op6893-21651-typec-sink.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_USB_DRD),y)
+op6893-boot-dts := mt6893-op6893-21651-usb-drd.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_MP2650_PROBE),y)
+op6893-boot-dts := mt6893-op6893-21651-mp2650-probe.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_USB_OTG),y)
+op6893-boot-dts := mt6893-op6893-21651-usb-otg.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_USB_OTG_GPIO),y)
+op6893-boot-dts := mt6893-op6893-21651-usb-otg-gpio.dts
+endif
+
+ifeq ($(CONFIG_ARM64_OP6893_21651_MODEM),y)
+op6893-boot-dts := mt6893-op6893-21651-modem.dts
+endif
+
+$(obj)/op6893-embed.dtb: $(srctree)/arch/arm64/boot/dts/mediatek/$(op6893-boot-dts) $(DTC) FORCE
+	$(call if_changed_dep,dtc)
+$(obj)/op6893-dtb.o: $(obj)/op6893-embed.dtb
+targets += op6893-embed.dtb

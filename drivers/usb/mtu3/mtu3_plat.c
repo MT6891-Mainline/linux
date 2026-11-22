@@ -176,7 +176,7 @@ static void ssusb_rscs_exit(struct ssusb_mtk *ssusb)
 	ssusb_phy_exit(ssusb);
 }
 
-static void ssusb_ip_sw_reset(struct ssusb_mtk *ssusb)
+void ssusb_ip_sw_reset(struct ssusb_mtk *ssusb)
 {
 	/* reset whole ip (xhci & u3d) */
 	mtu3_setbits(ssusb->ippc_base, U3D_SSUSB_IP_PW_CTRL0, SSUSB_IP_SW_RST);
@@ -289,10 +289,18 @@ static int get_ssusb_rscs(struct platform_device *pdev, struct ssusb_mtk *ssusb)
 	of_property_read_u32(node, "mediatek,u2p-dis-msk",
 			     &ssusb->u2p_dis_msk);
 
-	otg_sx->vbus = devm_regulator_get(dev, "vbus");
-	if (IS_ERR(otg_sx->vbus)) {
-		dev_err(dev, "failed to get vbus\n");
-		return PTR_ERR(otg_sx->vbus);
+	/*
+	 * With a connector role switch, VBUS can be owned by the
+	 * connector driver. Keep using a local regulator on legacy boards
+	 * that describe one.
+	 */
+	if (ssusb->dr_mode != USB_DR_MODE_OTG ||
+	    !of_property_read_bool(node, "usb-role-switch") ||
+	    of_property_present(node, "vbus-supply")) {
+		otg_sx->vbus = devm_regulator_get(dev, "vbus");
+		if (IS_ERR(otg_sx->vbus))
+			return dev_err_probe(dev, PTR_ERR(otg_sx->vbus),
+					     "failed to get vbus\n");
 	}
 
 	if (ssusb->dr_mode == USB_DR_MODE_HOST)
@@ -328,7 +336,6 @@ out:
 
 static int mtu3_probe(struct platform_device *pdev)
 {
-	struct device_node *node = pdev->dev.of_node;
 	struct device *dev = &pdev->dev;
 	struct ssusb_mtk *ssusb;
 	int ret = -ENOMEM;
@@ -401,7 +408,7 @@ static int mtu3_probe(struct platform_device *pdev)
 		}
 		break;
 	case USB_DR_MODE_HOST:
-		ret = ssusb_host_init(ssusb, node);
+		ret = ssusb_host_init(ssusb);
 		if (ret) {
 			dev_err(dev, "failed to initialize host\n");
 			goto comm_exit;
@@ -414,7 +421,7 @@ static int mtu3_probe(struct platform_device *pdev)
 			goto comm_exit;
 		}
 
-		ret = ssusb_host_init(ssusb, node);
+		ret = ssusb_host_init(ssusb);
 		if (ret) {
 			dev_err(dev, "failed to initialize host\n");
 			goto gadget_exit;
@@ -564,8 +571,6 @@ static int mtu3_suspend_common(struct device *dev, pm_message_t msg)
 		ssusb_wakeup_set(ssusb, true);
 	return 0;
 
-sleep_err:
-	resume_ip_and_ports(ssusb, msg);
 err:
 	return ret;
 }

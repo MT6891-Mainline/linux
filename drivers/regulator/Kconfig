@@ -842,6 +842,16 @@ config REGULATOR_MCP16502
 	  through the regulator interface. In addition it enables
 	  suspend-to-ram/standby transition.
 
+config REGULATOR_MP2650_OTG
+	tristate "MP2650 USB VBUS supply on the OP6893 21651"
+	depends on I2C && OF && GPIOLIB
+	select REGMAP_I2C
+	help
+	  Control the USB VBUS boost output of the MP2650 charger and
+	  the associated board GPIOs on the OP6893 21651.
+	  This driver exposes the 5 V output as a regulator for the Type-C
+	  controller. It does not provide a battery charging interface.
+
 config REGULATOR_MP5416
 	tristate "Monolithic MP5416 PMIC"
 	depends on I2C && OF

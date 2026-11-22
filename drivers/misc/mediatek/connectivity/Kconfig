@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 config MTK_COMBO
 bool "MediaTek MT6893 connectivity support"
+select RTC_LIB
 help
   Enable the downstream MediaTek connectivity stack for MT6893
   (CONNAC2X2 SOC3_0) on the chopin mainline port.

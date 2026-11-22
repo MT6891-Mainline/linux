@@ -56,6 +56,8 @@
 #include <asm/xen/hypervisor.h>
 #include <asm/mmu_context.h>
 
+#include "op6893-boot.h"
+
 static int num_standard_resources;
 static struct resource *standard_resources;
 
@@ -291,8 +293,9 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	early_ioremap_init();
 	mtk_logstore_breadcrumb_early("early_ioremap_init done");
 
-	setup_machine_fdt(__fdt_pointer);
+	setup_machine_fdt(op6893_prepare_fdt(__fdt_pointer));
 
+#ifdef CONFIG_ARM64_CHOPIN_LK_BOOT
 	/*
 	 * CHOPIN: replace the FDT LK handed us with the one linked into this
 	 * image (arch/arm64/kernel/chopin-board.dts, embedded by chopin-dtb.S).
@@ -337,6 +340,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 				     __pa(_binary_chopin_board_dtb_start));
 		early_init_dt_scan_chosen(boot_command_line);
 	}
+#endif
 	mtk_logstore_breadcrumb_early("setup_machine_fdt done");
 
 	/*
@@ -383,6 +387,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	mtk_logstore_breadcrumb_early("memblock_init done");
 
 	mtk_logstore_breadcrumb_early("before paging_init");
+	op6893_early_console_exit();
 	paging_init();
 
 	mtk_logstore_attach_early();

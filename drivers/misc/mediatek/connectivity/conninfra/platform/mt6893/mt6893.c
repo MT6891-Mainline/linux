@@ -14,6 +14,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_address.h>
 #include <linux/types.h>
+#include <linux/soc/mediatek/op6893-conn.h>
 
 #include <connectivity_build_in_adapter.h>
 
@@ -171,6 +172,9 @@ struct conninfra_plat_data mt6893_plat_data = {
 /* mtcmos contorl */
 int consys_clk_get_from_dts(struct platform_device *pdev)
 {
+	if (op6893_conn_board())
+		return 0;
+
 #if COMMON_KERNEL_CLK_SUPPORT
 	pm_runtime_enable(&pdev->dev);
 	dev_pm_syscore_device(&pdev->dev, true);
@@ -191,7 +195,7 @@ int consys_clk_detach(void)
 #if COMMON_KERNEL_CLK_SUPPORT
 	struct platform_device *pdev = get_consys_device();
 
-	if (pdev == NULL)
+	if (!pdev || op6893_conn_board())
 		return 0;
 	pm_runtime_disable(&pdev->dev);
 #endif
@@ -210,6 +214,13 @@ int consys_platform_spm_conn_ctrl_mt6893(unsigned int enable)
 		return -1;
 	}
 #endif
+
+	if (op6893_conn_board()) {
+		if (enable)
+			return op6893_conn_mtcmos_on();
+		op6893_conn_mtcmos_off();
+		return 0;
+	}
 
 	if (enable) {
 #if COMMON_KERNEL_CLK_SUPPORT

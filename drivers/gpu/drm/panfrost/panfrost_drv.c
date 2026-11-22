@@ -970,6 +970,8 @@ module_param_named(transparent_hugepage, panfrost_transparent_hugepage, bool, 04
 MODULE_PARM_DESC(transparent_hugepage, "Use a dedicated tmpfs mount point with Transparent Hugepage enabled (true = default)");
 #endif
 
+static const struct panfrost_compatible op6893_gpu_data;
+
 static int panfrost_probe(struct platform_device *pdev)
 {
 	struct panfrost_device *pfdev;
@@ -983,6 +985,9 @@ static int panfrost_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, pfdev);
 
 	pfdev->comp = of_device_get_match_data(&pdev->dev);
+	if (of_machine_is_compatible("realme,op6893") &&
+	    of_device_is_compatible(pdev->dev.of_node, "mediatek,mt6893-mali"))
+		pfdev->comp = &op6893_gpu_data;
 	if (!pfdev->comp)
 		return -ENODEV;
 
@@ -1146,8 +1151,23 @@ static const struct panfrost_compatible mediatek_mt8188_data = {
  * chopin hooks in panfrost_device.c; going through SPM power domains or
  * regulators on this board hard-resets it. */
 static const struct panfrost_compatible mediatek_mt6893_data = {
+	.chopin_power = true,
+	.needs_jm_reset = true,
 	.num_supplies = 0,
 	.num_pm_domains = 0,
+};
+
+static const char * const op6893_gpu_domains[] = {
+	"core0", "core1", "core2", "core3", "core4", "core5",
+};
+
+static const struct panfrost_compatible op6893_gpu_data = {
+	.needs_jm_reset = true,
+	.num_supplies = 1,
+	.supply_names = default_supplies,
+	.num_pm_domains = ARRAY_SIZE(op6893_gpu_domains),
+	.pm_domain_names = op6893_gpu_domains,
+	.gpu_quirks = BIT(GPU_QUIRK_FORCE_AARCH64_PGTABLE),
 };
 
 static const struct panfrost_compatible mediatek_mt8192_data = {

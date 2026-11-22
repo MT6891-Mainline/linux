@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "mt6893-op6893-21651-usb-drd.dts"
+
+/ {
+	i2c-charger-probe {
+		compatible = "i2c-gpio";
+		sda-gpios = <&pio 127 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&pio 126 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		i2c-gpio,delay-us = <10>;
+		i2c-gpio,timeout-ms = <25>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&charger_probe_pins>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+};
+
+&pio {
+	charger_probe_pins: charger-probe-pins {
+		pins {
+			pinmux = <PINMUX_GPIO126__FUNC_GPIO126>,
+				 <PINMUX_GPIO127__FUNC_GPIO127>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+};

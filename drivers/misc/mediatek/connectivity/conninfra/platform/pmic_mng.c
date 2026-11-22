@@ -21,6 +21,7 @@
 #include <linux/platform_device.h>
 
 #include <linux/regmap.h>
+#include <linux/soc/mediatek/op6893-conn.h>
 #include "osal.h"
 #if COMMON_KERNEL_PMIC_SUPPORT
 #include <linux/regulator/consumer.h>
@@ -174,35 +175,35 @@ static int consys_mt6368_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void pmic_mng_get_regmap(struct platform_device *pdev)
+static int pmic_mng_get_regmap(struct platform_device *pdev)
 {
 	struct device_node *pmic_node;
 	struct platform_device *pmic_pdev;
 	struct mt6397_chip *chip;
+	struct regmap *map = NULL;
+	bool op6893 = op6893_conn_board();
 
 	pmic_node = of_parse_phandle(pdev->dev.of_node, "pmic", 0);
-	if (!pmic_node) {
-		pr_info("get pmic_node fail\n");
-		return;
-	}
+	if (!pmic_node)
+		return -ENODEV;
 
 	pmic_pdev = of_find_device_by_node(pmic_node);
-	if (!pmic_pdev) {
-		pr_info("get pmic_pdev fail\n");
-		return;
-	}
+	of_node_put(pmic_node);
+	if (!pmic_pdev)
+		return -EPROBE_DEFER;
 
-	chip = dev_get_drvdata(&(pmic_pdev->dev));
-	if (!chip) {
-		pr_info("get chip fail\n");
-		return;
+	if (op6893) {
+		/* The OP6893 phandle points to pwrap, not the PMIC child. */
+		map = dev_get_regmap(&pmic_pdev->dev, NULL);
+	} else {
+		chip = dev_get_drvdata(&pmic_pdev->dev);
+		if (chip)
+			map = chip->regmap;
 	}
+	put_device(&pmic_pdev->dev);
 
-	g_regmap = chip->regmap;
-	if (IS_ERR_VALUE(g_regmap)) {
-		g_regmap = NULL;
-		pr_info("get regmap fail\n");
-	}
+	g_regmap = IS_ERR(map) ? NULL : map;
+	return g_regmap ? 0 : -EPROBE_DEFER;
 }
 #endif
 
@@ -212,7 +213,10 @@ int pmic_mng_init(
 	const struct conninfra_plat_data* plat_data)
 {
 #if COMMON_KERNEL_PMIC_SUPPORT
-	pmic_mng_get_regmap(pdev);
+	int ret = pmic_mng_get_regmap(pdev);
+
+	if (ret && op6893_conn_board())
+		return dev_err_probe(&pdev->dev, ret, "CONN PMIC regmap unavailable\n");
 #endif
 
 	if (consys_platform_pmic_ops == NULL)
@@ -220,7 +224,7 @@ int pmic_mng_init(
 			(const struct consys_platform_pmic_ops*)plat_data->platform_pmic_ops;
 
 	if (consys_platform_pmic_ops && consys_platform_pmic_ops->consys_pmic_get_from_dts)
-		consys_platform_pmic_ops->consys_pmic_get_from_dts(pdev, dev_cb);
+		return consys_platform_pmic_ops->consys_pmic_get_from_dts(pdev, dev_cb);
 
 	return 0;
 }

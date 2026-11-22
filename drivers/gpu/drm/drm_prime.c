@@ -28,6 +28,7 @@
 
 #include <linux/export.h>
 #include <linux/dma-buf.h>
+#include <linux/dma-resv.h>
 #include <linux/rbtree.h>
 #include <linux/module.h>
 
@@ -587,6 +588,9 @@ int drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data,
  * option for sharing lots of buffers for rendering.
  */
 
+static struct sg_table *
+drm_gem_prime_map(struct dma_buf_attachment *attach, enum dma_data_direction dir);
+
 /**
  * drm_gem_map_attach - dma_buf attach implementation for GEM
  * @dma_buf: buffer to attach device to
@@ -608,7 +612,8 @@ int drm_gem_map_attach(struct dma_buf *dma_buf,
 	 * drm_gem_map_dma_buf() requires obj->get_sg_table(), but drivers
 	 * that implement their own ->map_dma_buf() do not.
 	 */
-	if (dma_buf->ops->map_dma_buf == drm_gem_map_dma_buf &&
+	if ((dma_buf->ops->map_dma_buf == drm_gem_map_dma_buf ||
+	     dma_buf->ops->map_dma_buf == drm_gem_prime_map) &&
 	    !obj->funcs->get_sg_table)
 		return -ENOSYS;
 
@@ -680,12 +685,17 @@ struct sg_table *drm_gem_map_dma_buf(struct dma_buf_attachment *attach,
 	if (IS_ERR(sgt))
 		return sgt;
 
-	ret = dma_map_sgtable(attach->dev, sgt, dir,
-			      DMA_ATTR_SKIP_CPU_SYNC);
+	/*
+	 * Do not skip the CPU sync here. Freshly allocated pages can still
+	 * have their zeroes sitting dirty in the CPU caches, and those would
+	 * later be written back over whatever a non-coherent importer stored
+	 * in the buffer.
+	 */
+	ret = dma_map_sgtable(attach->dev, sgt, dir, 0);
 	if (ret) {
 		sg_free_table(sgt);
 		kfree(sgt);
-		sgt = ERR_PTR(ret);
+		return ERR_PTR(ret);
 	}
 
 	return sgt;
@@ -824,11 +834,122 @@ int drm_gem_dmabuf_mmap(struct dma_buf *dma_buf, struct vm_area_struct *vma)
 }
 EXPORT_SYMBOL(drm_gem_dmabuf_mmap);
 
+struct drm_gem_prime_mapping {
+	struct list_head node;
+	struct sg_table *sgt;
+	enum dma_data_direction dir;
+};
+
+static int drm_gem_prime_attach(struct dma_buf *dma_buf,
+				struct dma_buf_attachment *attach)
+{
+	struct list_head *mappings;
+	int ret;
+
+	mappings = kmalloc_obj(*mappings);
+	if (!mappings)
+		return -ENOMEM;
+
+	ret = drm_gem_map_attach(dma_buf, attach);
+	if (ret) {
+		kfree(mappings);
+		return ret;
+	}
+
+	INIT_LIST_HEAD(mappings);
+	attach->priv = mappings;
+	return 0;
+}
+
+static void drm_gem_prime_detach(struct dma_buf *dma_buf,
+				 struct dma_buf_attachment *attach)
+{
+	struct list_head *mappings = attach->priv;
+
+	WARN_ON(!list_empty(mappings));
+	kfree(mappings);
+	drm_gem_map_detach(dma_buf, attach);
+}
+
+static struct sg_table *
+drm_gem_prime_map(struct dma_buf_attachment *attach, enum dma_data_direction dir)
+{
+	struct drm_gem_prime_mapping *mapping;
+	struct sg_table *sgt;
+
+	mapping = kmalloc_obj(*mapping);
+	if (!mapping)
+		return ERR_PTR(-ENOMEM);
+
+	sgt = drm_gem_map_dma_buf(attach, dir);
+	if (IS_ERR(sgt)) {
+		kfree(mapping);
+		return sgt;
+	}
+
+	mapping->sgt = sgt;
+	mapping->dir = dir;
+	list_add(&mapping->node, attach->priv);
+	return sgt;
+}
+
+static void drm_gem_prime_unmap(struct dma_buf_attachment *attach,
+				 struct sg_table *sgt, enum dma_data_direction dir)
+{
+	struct drm_gem_prime_mapping *mapping;
+
+	list_for_each_entry(mapping, (struct list_head *)attach->priv, node) {
+		if (mapping->sgt == sgt) {
+			list_del(&mapping->node);
+			kfree(mapping);
+			break;
+		}
+	}
+
+	drm_gem_unmap_dma_buf(attach, sgt, dir);
+}
+
+static int drm_gem_prime_begin_cpu_access(struct dma_buf *dma_buf,
+					  enum dma_data_direction dir)
+{
+	struct dma_buf_attachment *attach;
+	struct drm_gem_prime_mapping *mapping;
+
+	dma_resv_lock(dma_buf->resv, NULL);
+	list_for_each_entry(attach, &dma_buf->attachments, node) {
+		list_for_each_entry(mapping, (struct list_head *)attach->priv, node)
+			dma_sync_sgtable_for_cpu(attach->dev, mapping->sgt, mapping->dir);
+	}
+	dma_resv_unlock(dma_buf->resv);
+	return 0;
+}
+
+static int drm_gem_prime_end_cpu_access(struct dma_buf *dma_buf,
+					enum dma_data_direction dir)
+{
+	struct dma_buf_attachment *attach;
+	struct drm_gem_prime_mapping *mapping;
+
+	/* The CPU only read the buffer; there is nothing to write back. */
+	if (dir == DMA_FROM_DEVICE)
+		return 0;
+
+	dma_resv_lock(dma_buf->resv, NULL);
+	list_for_each_entry(attach, &dma_buf->attachments, node) {
+		list_for_each_entry(mapping, (struct list_head *)attach->priv, node)
+			dma_sync_sgtable_for_device(attach->dev, mapping->sgt, mapping->dir);
+	}
+	dma_resv_unlock(dma_buf->resv);
+	return 0;
+}
+
 static const struct dma_buf_ops drm_gem_prime_dmabuf_ops =  {
-	.attach = drm_gem_map_attach,
-	.detach = drm_gem_map_detach,
-	.map_dma_buf = drm_gem_map_dma_buf,
-	.unmap_dma_buf = drm_gem_unmap_dma_buf,
+	.attach = drm_gem_prime_attach,
+	.detach = drm_gem_prime_detach,
+	.map_dma_buf = drm_gem_prime_map,
+	.unmap_dma_buf = drm_gem_prime_unmap,
+	.begin_cpu_access = drm_gem_prime_begin_cpu_access,
+	.end_cpu_access = drm_gem_prime_end_cpu_access,
 	.release = drm_gem_dmabuf_release,
 	.mmap = drm_gem_dmabuf_mmap,
 	.vmap = drm_gem_dmabuf_vmap,

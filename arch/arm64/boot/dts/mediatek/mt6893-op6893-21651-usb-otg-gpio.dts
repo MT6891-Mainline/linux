@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#define OP6893_I2C5_NODE i2c-mt6360
+#include "mt6893-op6893-21651-usb-otg.dts"
+
+&i2c5 {
+	compatible = "i2c-gpio";
+	/delete-property/ reg;
+	/delete-property/ interrupts;
+	/delete-property/ clocks;
+	/delete-property/ clock-names;
+	/delete-property/ clock-div;
+	/delete-property/ clock-frequency;
+	/delete-property/ mediatek,use-push-pull;
+
+	sda-gpios = <&pio 203 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	scl-gpios = <&pio 202 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	i2c-gpio,delay-us = <10>;
+	i2c-gpio,timeout-ms = <25>;
+};
+
+&i2c5_pins {
+	pins-bus {
+		pinmux = <PINMUX_GPIO202__FUNC_GPIO202>,
+			 <PINMUX_GPIO203__FUNC_GPIO203>;
+		input-enable;
+	};
+};

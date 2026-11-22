@@ -2594,6 +2594,99 @@ config DMI
 	  However, even with this option, the resultant kernel should
 	  continue to boot on existing non-UEFI platforms.
 
+config ARM64_CHOPIN_LK_BOOT
+	bool "Xiaomi Chopin LK boot handoff"
+	depends on ARCH_MEDIATEK
+	help
+	  Embed the Chopin device tree and enable the Chopin early boot
+	  breadcrumbs at board-specific physical addresses.
+
+config ARM64_OP6893_BRINGUP
+	bool "OP6893 LK boot handoff"
+	depends on ARCH_MEDIATEK && !ARM64_CHOPIN_LK_BOOT
+	select ARCH_USE_MEMREMAP_PROT
+	help
+	  Merge the LK bootloader memory layout and boot parameters with an
+	  embedded OP6893 device tree before the early memory scan.
+
+config ARM64_OP6893_21651
+	bool "Use the OP6893 21651 board device tree"
+	depends on ARM64_OP6893_BRINGUP
+
+config ARM64_OP6893_21651_TYPEC_SINK
+	bool "Use the OP6893 21651 Type-C sink test device tree"
+	depends on ARM64_OP6893_21651 && !ARM64_OP6893_21651_MODEM
+	depends on TYPEC_MT6360
+	help
+	  Enable Type-C attach and orientation reporting for the USB
+	  peripheral port, without USB Power Delivery or VBUS sourcing.
+	  The MTU3 controller stays in peripheral mode, preserving
+	  the serial and Ethernet gadget functions used for bring-up.
+
+config ARM64_OP6893_21651_USB_DRD
+	bool "Use the OP6893 21651 USB dual-role test device tree"
+	depends on ARM64_OP6893_21651_TYPEC_SINK && USB_MTU3_DUAL_ROLE
+	depends on USB_XHCI_MTK
+	help
+	  Register the xHCI controller and the USB data role switch.
+	  The Type-C port remains a fixed sink with PD disabled, so
+	  this profile can exercise the controller without enabling
+	  the board's USB VBUS source.
+
+config ARM64_OP6893_21651_MP2650_PROBE
+	bool "Expose the OP6893 21651 charger bus for diagnostics"
+	depends on ARM64_OP6893_21651_USB_DRD && I2C_GPIO=y
+	help
+	  Use open-drain GPIO I2C on the charger bus for bring-up.
+	  This is a temporary alternative to the native FIFO-only I2C
+	  controller. It does not bind a charger driver or control
+	  the VBUS source.
+
+config ARM64_OP6893_21651_USB_OTG
+	bool "Use the OP6893 21651 powered USB OTG test device tree"
+	depends on ARM64_OP6893_21651_MP2650_PROBE && REGULATOR_MP2650_OTG=y
+	help
+	  Let TCPM select the USB role and control the MP2650 VBUS source
+	  on the 21651. This profile does not enable USB Power Delivery.
+	  Use this profile for USB 2.0 host and peripheral testing.
+	  Boards without the MP2650 keep their existing USB configuration.
+
+config ARM64_OP6893_21651_USB_OTG_GPIO
+	bool "Test the OP6893 21651 USB OTG with GPIO I2C5"
+	depends on ARM64_OP6893_21651_USB_OTG
+	help
+	  Put MT6360 on an open-drain GPIO adapter for OTG diagnosis.
+	  This bypasses the I2C5 controller, its clocks and APDMA.
+	  The pins and MT6360 child devices are unchanged.
+	  Use this only to isolate I2C5 failures on the 21651.
+
+config ARM64_OP6893_CONN_PREFLIGHT
+	bool "Experimental op6893 connectivity preflight and rail cycle"
+	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL
+	help
+	  Expose a root-only sequential snapshot of always-on AP power state,
+	  MT6359P registers and explicitly described regulator providers.
+	  An explicit board opt-in also permits a one-shot common-rail cycle,
+	  with shared-parent lifetime votes. A further opt-in permits a bounded
+	  CONN domain cycle and guarded digital-ID reads. Neither establishes
+	  full ownership of inherited upstream inputs.
+
+config ARM64_OP6893_FBKICK
+	bool "OP6893 early framebuffer using the LK display handoff"
+	depends on ARM64_OP6893_BRINGUP && FB
+
+config ARM64_OP6893_21651_MODEM
+	bool "Enable the op6893 21651 modem resource owners"
+	depends on ARM64_OP6893_21651
+	help
+	  Use the 21651 tree that also enables the modem resource owners: the
+	  MD1 power domain, its PMIC supplies, the cold platform owner, the SCP
+	  owner and DPMAIF. The plain 21651 tree keeps them disabled so an image
+	  without the corresponding drivers cannot power or reset the modem.
+	  Only one owner may snapshot the LK tag buffer, so this tree disables
+	  the metadata-only handoff node. Select it only for an explicit modem
+	  bring-up image.
+
 endmenu # "Boot options"
 
 menu "Power management options"
