@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Experimental op6893 readback of MAINPLL/MFGPLL inherited from the bootloader. */
+/* Experimental op6893 clocks inherited from the bootloader. */
 
 #include <linux/bitfield.h>
 #include <linux/clk.h>
@@ -17,6 +17,9 @@
 #define MFGPLL_CON0	0x268
 #define MFGPLL_CON1	0x26c
 #define MFGPLL_CON3	0x274
+#define UNIVPLL_CON0	0x308
+#define UNIVPLL_CON1	0x30c
+#define UNIVPLL_CON3	0x314
 #define PLL_PCW		GENMASK(21, 0)
 #define PLL_POSTDIV	GENMASK(26, 24)
 
@@ -129,6 +132,10 @@ static const struct mt6893_pll_desc mt6893_plls[] = {
 	  MAINPLL_CON0, MAINPLL_CON1, MAINPLL_CON3 },
 	{ CLK_APMIXED_MFGPLL, "mt6893_mfgpll", &mt6893_mfgpll_ops,
 	  MFGPLL_CON0, MFGPLL_CON1, MFGPLL_CON3 },
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+	{ CLK_APMIXED_UNIVPLL, "mt6893_univpll", &mt6893_pll_ops,
+	  UNIVPLL_CON0, UNIVPLL_CON1, UNIVPLL_CON3 },
+#endif
 };
 
 static struct clk_hw *mt6893_pll_get(struct of_phandle_args *clkspec,
@@ -203,7 +210,7 @@ static int mt6893_mainpll_probe(struct platform_device *pdev)
 			return ret;
 
 		dev_info(dev, "%s%s registered: %lu Hz (register-derived)\n",
-			 desc->id == CLK_APMIXED_MAINPLL ? "read-only " : "",
+			 desc->ops == &mt6893_pll_ops ? "read-only " : "",
 			 desc->name, rate);
 	}
 

@@ -191,6 +191,14 @@ static struct clk_hw *mt6893_scp_bootstrap_register(struct device *dev)
 #endif
 
 static const struct mtk_fixed_factor top_factors[] = {
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+	FACTOR_FLAGS(CLK_TOP_UNIVPLL_D5_D2, "mt6893_univpll_d5_d2",
+		     "mt6893_univpll", 1, 10, 0),
+	FACTOR_FLAGS(CLK_TOP_UNIVPLL_D5_D4, "mt6893_univpll_d5_d4",
+		     "mt6893_univpll", 1, 20, 0),
+	FACTOR_FLAGS(CLK_TOP_UNIVPLL_D6_D4, "mt6893_univpll_d6_d4",
+		     "mt6893_univpll", 1, 24, 0),
+#endif
 	FACTOR_FLAGS(CLK_TOP_MAINPLL_D5_D2, "mt6893_mainpll_d5_d2",
 		     "mt6893_mainpll", 1, 10, 0),
 	FACTOR_FLAGS(CLK_TOP_OSC_D4, "mt6893_osc_d4", "mt6893_ulposc", 1, 4, 0),
@@ -216,6 +224,15 @@ static const char * const mfg_parents[] = {
 	"mt6893_mainpll_d5_d2",
 };
 
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+static const char * const usb_parents[] = {
+	"clk26m",
+	"mt6893_univpll_d5_d4",
+	"mt6893_univpll_d6_d4",
+	"mt6893_univpll_d5_d2",
+};
+#endif
+
 /* Keep the supply transport alive even if a consumer fails to probe. */
 static const struct mtk_mux top_muxes[] = {
 	MUX_GATE_CLR_SET_UPD_FLAGS(CLK_TOP_PWRAP_ULPOSC_SEL,
@@ -230,6 +247,14 @@ static const struct mtk_mux top_muxes[] = {
 			       0x60, 0x64, 0x68, 8, 2, 0, 0x4, 21,
 			       CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
 			       mtk_mux_clr_set_upd_ops),
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+	MUX_GATE_CLR_SET_UPD_FLAGS(CLK_TOP_USB_TOP_SEL, "mt6893_usb_sel",
+				  usb_parents, 0xa0, 0xa4, 0xa8, 24, 2, 31,
+				  0x8, 8, CLK_IGNORE_UNUSED),
+	MUX_GATE_CLR_SET_UPD_FLAGS(CLK_TOP_SSUSB_XHCI_SEL, "mt6893_xhci_sel",
+				  usb_parents, 0xb0, 0xb4, 0xb8, 0, 2, 7,
+				  0x8, 9, CLK_IGNORE_UNUSED),
+#endif
 };
 
 /*
@@ -270,7 +295,22 @@ static const struct mtk_gate_regs infra_gate_regs = {
 	.sta_ofs = 0x90,
 };
 
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+static const struct mtk_gate_regs usb_gate_regs = {
+	.set_ofs = 0xa4,
+	.clr_ofs = 0xa8,
+	.sta_ofs = 0xac,
+};
+#endif
+
 static const struct mtk_gate infra_gates[] = {
+#ifdef CONFIG_ARM64_OP6893_21651_USB_DRD
+	GATE_MTK_FLAGS(CLK_INFRA_AO_SSUSB, "mt6893_ssusb", "mt6893_usb_sel",
+		       &usb_gate_regs, 1, &mtk_clk_gate_ops_setclr, CLK_IGNORE_UNUSED),
+	GATE_MTK_FLAGS(CLK_INFRA_AO_SSUSB_XHCI, "mt6893_ssusb_xhci",
+		       "mt6893_xhci_sel", &usb_gate_regs, 31,
+		       &mtk_clk_gate_ops_setclr, CLK_IGNORE_UNUSED),
+#endif
 	GATE_MTK_FLAGS(CLK_IFRAO_PMIC_TMR, "mt6893_pmic_tmr",
 		       "mt6893_fpwrap_ulposc", &infra_gate_regs, 0,
 		       &mtk_clk_gate_ops_setclr, CLK_IS_CRITICAL),
@@ -416,6 +456,8 @@ static int mt6893_pmif_clk_probe(struct platform_device *pdev)
 
 	/* Vendor IDs are sparse: the generic count-based probe is unsuitable. */
 	num_clks = top ? CLK_TOP_PWRAP_ULPOSC_SEL + 1 : CLK_IFRAO_THERM + 1;
+	if (IS_ENABLED(CONFIG_ARM64_OP6893_21651_USB_DRD))
+		num_clks = top ? CLK_TOP_SSUSB_XHCI_SEL + 1 : CLK_INFRA_AO_SSUSB_XHCI + 1;
 	if (!top && IS_ENABLED(CONFIG_COMMON_CLK_MT6893_CCIF))
 		num_clks = max(num_clks, (unsigned int)CLK_IFRAO_CCIF2_MD + 1);
 	if (!top && IS_ENABLED(CONFIG_COMMON_CLK_MT6893_DPMAIF))
