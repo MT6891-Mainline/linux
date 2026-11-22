@@ -2651,6 +2651,15 @@ config ARM64_OP6893_21651_USB_OTG
 	  Use this profile for USB 2.0 host and peripheral testing.
 	  Boards without the MP2650 keep their existing USB configuration.
 
+config ARM64_OP6893_21651_USB_OTG_GPIO
+	bool "Test the OP6893 21651 USB OTG with GPIO I2C5"
+	depends on ARM64_OP6893_21651_USB_OTG
+	help
+	  Put MT6360 on an open-drain GPIO adapter for OTG diagnosis.
+	  This bypasses the I2C5 controller, its clocks and APDMA.
+	  The pins and MT6360 child devices are unchanged.
+	  Use this only to isolate I2C5 failures on the 21651.
+
 config ARM64_OP6893_CONN_PREFLIGHT
 	bool "Experimental op6893 connectivity preflight and rail cycle"
 	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL

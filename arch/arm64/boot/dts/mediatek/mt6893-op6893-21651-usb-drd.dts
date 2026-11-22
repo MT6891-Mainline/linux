@@ -26,7 +26,7 @@
 	};
 };
 
-&{/soc/i2c@11f00000/pmic@34/tcpc/connector} {
+&mt6360_connector {
 	port {
 		usb_c_hs_ep: endpoint {
 			remote-endpoint = <&usb_hs_ep>;

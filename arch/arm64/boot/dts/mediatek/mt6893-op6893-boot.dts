@@ -1111,7 +1111,10 @@
 	 * PMIC bus: MT6360 (0x34 PMU, 0x1a PMIC, 0x64 LDO). The clock gate
 	 * on imp_iic_wrap_n is inherited from LK.
 	 */
-	i2c5: i2c@11f00000 {
+	#ifndef OP6893_I2C5_NODE
+#define OP6893_I2C5_NODE i2c@11f00000
+#endif
+	i2c5: OP6893_I2C5_NODE {
 		compatible = "mediatek,mt8192-i2c";
 		reg = <0 0x11f00000 0 0x1000>,
 		      <0 0x11000500 0 0x80>;
@@ -1126,7 +1129,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		pmic@34 {
+		mt6360: pmic@34 {
 			compatible = "mediatek,mt6360";
 			reg = <0x34>;
 			interrupts-extended = <&pio 24 IRQ_TYPE_LEVEL_LOW>;

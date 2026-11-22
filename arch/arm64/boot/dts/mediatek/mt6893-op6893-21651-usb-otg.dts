@@ -15,7 +15,7 @@
 	};
 };
 
-&{/soc/i2c@11f00000/pmic@34/tcpc} {
+&mt6360_tcpc {
 	vbus-source-supply = <&{/i2c-charger-probe/usb-vbus@5c}>;
 
 	connector {

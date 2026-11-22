@@ -123,6 +123,10 @@ ifeq ($(CONFIG_ARM64_OP6893_21651_USB_OTG),y)
 op6893-boot-dts := mt6893-op6893-21651-usb-otg.dts
 endif
 
+ifeq ($(CONFIG_ARM64_OP6893_21651_USB_OTG_GPIO),y)
+op6893-boot-dts := mt6893-op6893-21651-usb-otg-gpio.dts
+endif
+
 ifeq ($(CONFIG_ARM64_OP6893_21651_MODEM),y)
 op6893-boot-dts := mt6893-op6893-21651-modem.dts
 endif
