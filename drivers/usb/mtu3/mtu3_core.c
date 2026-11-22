@@ -376,6 +376,9 @@ void mtu3_start(struct mtu3 *mtu)
 		mtu3_clrbits(mtu->ippc_base, SSUSB_U2_CTRL(0),
 			     SSUSB_U2_PORT_OTG_SEL);
 		mtu3_setbits(mbase, U3D_MISC_CTRL, VBUS_FRC_EN | VBUS_ON);
+		/* The shared IP reset on host entry clears the queue format. */
+		if (mtu->ssusb->dr_mode == USB_DR_MODE_OTG && mtu->gen2cp)
+			mtu3_writel(mbase, U3D_QFCR, ~0x0);
 		dev_info(mtu->dev, "op6893: forced VBUS, misc=%#x u2ctl=%#x\n",
 			 mtu3_readl(mbase, U3D_MISC_CTRL),
 			 mtu3_readl(mtu->ippc_base, SSUSB_U2_CTRL(0)));

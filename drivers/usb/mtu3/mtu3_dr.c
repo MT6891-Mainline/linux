@@ -133,6 +133,8 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 	struct mtu3 *mtu = ssusb->u3d;
 	enum usb_role desired_role = otg_sx->desired_role;
 	enum usb_role current_role;
+	bool reset_on_host_entry = ssusb_host_follows_role(ssusb) &&
+				   of_machine_is_compatible("realme,op6893");
 	int ret;
 
 	current_role = ssusb->is_host ? USB_ROLE_HOST : USB_ROLE_DEVICE;
@@ -155,8 +157,22 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 
 	switch (desired_role) {
 	case USB_ROLE_HOST:
-		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_HOST);
+		if (!reset_on_host_entry)
+			ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_HOST);
 		mtu3_stop(mtu);
+		if (reset_on_host_entry) {
+			/*
+			 * Match the vendor host entry: reset the shared IP
+			 * before starting xHCI, with the gadget stopped.
+			 */
+			synchronize_irq(mtu->irq);
+			ssusb_ip_sw_reset(ssusb);
+			ret = ssusb_host_enable(ssusb);
+			if (ret)
+				goto restore_device;
+			ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_HOST);
+			dev_info(ssusb->dev, "shared USB IP reset before host start\n");
+		}
 		switch_port_to_host(ssusb);
 		ssusb_set_vbus(otg_sx, 1);
 		if (!ssusb_host_follows_role(ssusb) || !ssusb_host_populate(ssusb)) {
@@ -167,6 +183,7 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 		/* Child creation failed; restore the gadget. */
 		fallthrough;
 	case USB_ROLE_DEVICE:
+restore_device:
 		if (ssusb_host_follows_role(ssusb))
 			ssusb_host_depopulate(ssusb);
 		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);

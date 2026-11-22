@@ -20,6 +20,7 @@ static inline bool ssusb_host_follows_role(struct ssusb_mtk *ssusb)
 }
 
 int ssusb_host_populate(struct ssusb_mtk *ssusb);
+int ssusb_host_enable(struct ssusb_mtk *ssusb);
 void ssusb_host_depopulate(struct ssusb_mtk *ssusb);
 int ssusb_host_init(struct ssusb_mtk *ssusb);
 void ssusb_host_exit(struct ssusb_mtk *ssusb);
