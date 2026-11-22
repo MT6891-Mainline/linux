@@ -8,6 +8,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
@@ -44,7 +45,9 @@ struct mt6360_tcpc_info {
 	struct tcpci *tcpci;
 	struct device *dev;
 	struct regulator *vbus;
+	struct mutex vbus_lock;
 	bool sourcing;
+	bool shutting_down;
 	int irq;
 };
 
@@ -155,10 +158,9 @@ static int mt6360_tcpc_init(struct tcpci *tcpci, struct tcpci_data *tdata)
 	return regmap_write(regmap, MT6360_REG_MODECTRL2, 0x7A);
 }
 
-static int mt6360_tcpc_set_vbus(struct tcpci *tcpci, struct tcpci_data *tdata,
-			       bool source, bool sink)
+static int mt6360_tcpc_update_vbus(struct mt6360_tcpc_info *mti, bool source, bool sink)
 {
-	struct mt6360_tcpc_info *mti = container_of(tdata, struct mt6360_tcpc_info, tdata);
+	struct tcpci_data *tdata = &mti->tdata;
 	unsigned int status;
 	int ret;
 
@@ -209,6 +211,22 @@ err:
 	return ret;
 }
 
+static int mt6360_tcpc_set_vbus(struct tcpci *tcpci, struct tcpci_data *tdata,
+			       bool source, bool sink)
+{
+	struct mt6360_tcpc_info *mti = container_of(tdata, struct mt6360_tcpc_info, tdata);
+	int ret;
+
+	mutex_lock(&mti->vbus_lock);
+	if (mti->shutting_down)
+		ret = -ESHUTDOWN;
+	else
+		ret = mt6360_tcpc_update_vbus(mti, source, sink);
+	mutex_unlock(&mti->vbus_lock);
+
+	return ret;
+}
+
 static irqreturn_t mt6360_irq(int irq, void *dev_id)
 {
 	struct mt6360_tcpc_info *mti = dev_id;
@@ -238,12 +256,13 @@ static int mt6360_tcpc_probe(struct platform_device *pdev)
 		return mti->irq;
 
 	mti->tdata.init = mt6360_tcpc_init;
-	if (device_property_present(&pdev->dev, "vbus-supply")) {
-		mti->vbus = devm_regulator_get_optional(&pdev->dev, "vbus");
+	if (device_property_present(&pdev->dev, "vbus-source-supply")) {
+		mti->vbus = devm_regulator_get_optional(&pdev->dev, "vbus-source");
 		if (IS_ERR(mti->vbus))
 			return dev_err_probe(&pdev->dev, PTR_ERR(mti->vbus),
 					     "Could not get external VBUS supply\n");
 
+		mutex_init(&mti->vbus_lock);
 		mti->tdata.set_vbus = mt6360_tcpc_set_vbus;
 	}
 
@@ -305,9 +324,22 @@ static void mt6360_tcpc_remove(struct platform_device *pdev)
 static void mt6360_tcpc_shutdown(struct platform_device *pdev)
 {
 	struct mt6360_tcpc_info *mti = platform_get_drvdata(pdev);
+	int ret;
 
-	if (mti->vbus)
-		mt6360_tcpc_remove(pdev);
+	if (!mti->vbus)
+		return;
+
+	mutex_lock(&mti->vbus_lock);
+	mti->shutting_down = true;
+	if (mti->sourcing) {
+		ret = regulator_disable(mti->vbus);
+		if (ret)
+			dev_err(mti->dev, "Failed to disable external VBUS at shutdown: %d\n",
+				ret);
+		else
+			mti->sourcing = false;
+	}
+	mutex_unlock(&mti->vbus_lock);
 }
 
 static int __maybe_unused mt6360_tcpc_suspend(struct device *dev)
