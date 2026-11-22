@@ -2,6 +2,8 @@
 #include "mt6893-op6893-21651-typec-sink.dts"
 
 &usb0 {
+	clocks = <&ufs_infracfg CLK_INFRA_AO_SSUSB>,
+		 <&ufs_infracfg CLK_INFRA_AO_SSUSB_XHCI>;
 	dr_mode = "otg";
 	usb-role-switch;
 	role-switch-default-mode = "peripheral";
