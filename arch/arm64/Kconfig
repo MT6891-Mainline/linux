@@ -2633,6 +2633,15 @@ config ARM64_OP6893_21651_USB_DRD
 	  this profile can exercise the controller without enabling
 	  the board's USB VBUS source.
 
+config ARM64_OP6893_21651_MP2650_PROBE
+	bool "Expose the OP6893 21651 charger bus for diagnostics"
+	depends on ARM64_OP6893_21651_USB_DRD && I2C_GPIO=y
+	help
+	  Use open-drain GPIO I2C on the charger bus for bring-up.
+	  This is a temporary alternative to the native FIFO-only I2C
+	  controller. It does not bind a charger driver or control
+	  the VBUS source.
+
 config ARM64_OP6893_CONN_PREFLIGHT
 	bool "Experimental op6893 connectivity preflight and rail cycle"
 	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL
