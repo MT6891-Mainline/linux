@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "mt6893-op6893-21651-mp2650-probe.dts"
+
+/ {
+	i2c-charger-probe {
+		usb-vbus@5c {
+			compatible = "oplus,21651-mp2650-otg";
+			reg = <0x5c>;
+			otg-enable-gpios = <&pio 133 GPIO_ACTIVE_HIGH>;
+			input-isolate-gpios = <&pio 9 GPIO_ACTIVE_HIGH>;
+			regulator-name = "usb-vbus";
+			regulator-min-microvolt = <5000000>;
+			regulator-max-microvolt = <5000000>;
+		};
+	};
+};
+
+&{/soc/i2c@11f00000/pmic@34/tcpc} {
+	vbus-supply = <&{/i2c-charger-probe/usb-vbus@5c}>;
+
+	connector {
+		power-role = "dual";
+		data-role = "dual";
+		try-power-role = "sink";
+	};
+};

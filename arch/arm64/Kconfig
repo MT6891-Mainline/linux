@@ -2642,6 +2642,15 @@ config ARM64_OP6893_21651_MP2650_PROBE
 	  controller. It does not bind a charger driver or control
 	  the VBUS source.
 
+config ARM64_OP6893_21651_USB_OTG
+	bool "Use the OP6893 21651 powered USB OTG test device tree"
+	depends on ARM64_OP6893_21651_MP2650_PROBE && REGULATOR_MP2650_OTG=y
+	help
+	  Let TCPM select the USB role and control the MP2650 VBUS source
+	  on the 21651. This profile does not enable USB Power Delivery.
+	  Use this profile for USB 2.0 host and peripheral testing.
+	  Boards without the MP2650 keep their existing USB configuration.
+
 config ARM64_OP6893_CONN_PREFLIGHT
 	bool "Experimental op6893 connectivity preflight and rail cycle"
 	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL
