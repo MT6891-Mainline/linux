@@ -31,4 +31,6 @@
 #define CLK_IFRAO_DPMAIF	39
 #define CLK_IFRAO_DPMAIF_MAIN	74
 
+#define CLK_INFRA_AO_SSUSB_XHCI	59
+
 #endif
