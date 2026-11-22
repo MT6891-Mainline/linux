@@ -1,0 +1,1298 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/dts-v1/;
+#include "mt6893-op6893-lk.dtsi"
+#include "mt6893-pinfunc.h"
+#include <dt-bindings/pinctrl/mt65xx.h>
+#include <dt-bindings/iio/adc/mediatek,mt6359-auxadc.h>
+#include <dt-bindings/spmi/spmi.h>
+#include <dt-bindings/thermal/thermal.h>
+#include <dt-bindings/thermal/mediatek,lvts-thermal.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/reset/ti-syscon.h>
+#include <dt-bindings/clock/mt6893-clk.h>
+#include <dt-bindings/power/mediatek,mt6893-power.h>
+
+/ {
+	model = "Realme GT Neo op6893 (direct LK bring-up)";
+	compatible = "realme,op6893", "mediatek,mt6893";
+
+	/* Metadata only. Keep disabled until a read-only inspection is scheduled. */
+	modem-handoff {
+		compatible = "realme,op6893-modem-handoff";
+		memory-region = <&ccci_tag>, <&md_nc_smem>, <&md_c_smem>;
+		memory-region-names = "tags", "noncached", "cached";
+		status = "disabled";
+	};
+
+	/* Mutually exclusive with modem-handoff; explicit cold power cycle only. */
+	modem-platform@10209000 {
+		compatible = "realme,op6893-modem-platform";
+		mediatek,dpmaif = <&dpmaif>;
+		reg = <0 0x10209000 0 0x1000>, <0 0x1020a000 0 0x1000>,
+		      <0 0x1023c000 0 0x1000>, <0 0x1023d000 0 0x1000>;
+		reg-names = "ccif-ap", "ccif-md", "ccif2-ap", "ccif2-md";
+		interrupts = <GIC_SPI 194 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 195 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "data", "exception";
+		memory-region = <&ccci_tag>, <&md_nc_smem>, <&md_c_smem>;
+		memory-region-names = "tags", "noncached", "cached";
+		md-vmodem-supply = <&mt6315_3_vbuck1>;
+		md-vnr-supply = <&mt6315_3_vbuck3>;
+		md-vsram-supply = <&mt6315_3_vbuck4>;
+		md-vdigrf-supply = <&mt6359_vpu>;
+		clocks = <&ufs_infracfg CLK_IFRAO_CCIF_AP>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF_MD>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF1_AP>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF1_MD>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF2_AP>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF2_MD>;
+		clock-names = "ccif-ap", "ccif-md", "ccif1-ap", "ccif1-md",
+			      "ccif2-ap", "ccif2-md";
+		mediatek,scp = <&ccci_scp>;
+		mediatek,spm = <&scpsys>;
+		mediatek,infracfg = <&ufs_infracfg>;
+		/*
+		 * Saved ACK FDT has no md_ccci_rtc node or "external-32k" cell, and
+		 * the 4.19 ccci_rtc global therefore stays zero, so the vendor path
+		 * advertises RTC_32K_LESS. This is an explicit board fact, not a
+		 * default for any other op6893 unit.
+		 */
+		mediatek,no-external-32k;
+		/*
+		 * Band-support straps the MD resolves by name. The vendor saved FDT
+		 * places these four detection pins at pinctrl cells 63..66, which are
+		 * also the MD-view ids, so the ids repeat the pin numbers. Levels are
+		 * sampled at probe, never assumed.
+		 */
+		band-strap-gpios = <&pio 63 GPIO_ACTIVE_HIGH>,
+				   <&pio 64 GPIO_ACTIVE_HIGH>,
+				   <&pio 65 GPIO_ACTIVE_HIGH>,
+				   <&pio 66 GPIO_ACTIVE_HIGH>;
+		band-strap-ids = <63 64 65 66>;
+		status = "disabled";
+
+		/* Avoid automatic platform-bus power-on before rail checks. */
+		power {
+			power-domains = <&spm MT6893_POWER_DOMAIN_MD1>;
+		};
+	};
+
+	/*
+	 * DPMAIF: the same-board data transport for CCMNI on MD generation 6297.
+	 * Address map, IRQ and clocks are the vendor mt6893 node's. The INFRA_AO_MEM
+	 * word the vendor sets before its first ring write is mapped here as a fifth
+	 * region so the driver does not need a second device node for one bit.
+	 */
+	dpmaif: dpmaif@10014000 {
+		compatible = "mediatek,mt6893-dpmaif";
+		reg = <0 0x10014000 0 0x1000>,	/* AO_UL */
+		      <0 0x1022d000 0 0x1000>,	/* PD_UL */
+		      <0 0x1022c000 0 0x1000>,	/* PD_MD_MISC */
+		      <0 0x1022e000 0 0x1000>,	/* SRAM */
+		      <0 0x10002000 0 0x1000>;	/* INFRA_AO_MEM */
+		reg-names = "ao-ul", "pd-ul", "pd-md-misc", "sram", "infra-ao-mem";
+		interrupts = <GIC_SPI 209 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ufs_infracfg CLK_IFRAO_DPMAIF_MAIN>,
+			 <&ufs_infracfg CLK_IFRAO_DPMAIF>;
+		clock-names = "dpmaif-main", "dpmaif";
+		mediatek,infracfg = <&ufs_infracfg>;
+		status = "disabled";
+	};
+
+	/* Explicit bounded observations; no SCP start or READY assertion. */
+	ccci_scp: scp-resource-hold@10724000 {
+		compatible = "realme,op6893-scp-resource-hold";
+		reg = <0 0x10724000 0 0x1000>,
+		      <0 0x107fb000 0 0x1000>,
+		      <0 0x107fc000 0 0x1000>,
+		      <0 0x107fd000 0 0x1000>,
+		      <0 0x107fe000 0 0x1000>,
+		      <0 0x107ff000 0 0x1000>,
+		      <0 0x10730000 0 0x1000>,
+		      <0 0x10740000 0 0x1000>,
+		      <0 0x10500000 0 0x180000>;
+		reg-names = "scp-cfg", "mbox0", "mbox1", "mbox2", "mbox3", "mbox4",
+			    "core0", "core1", "tcm";
+		interrupts = <GIC_SPI 436 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 437 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 438 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 440 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+		clocks = <&topckgen CLK_TOP_SCP>;
+		clock-names = "scp";
+		mediatek,send-table = <0 0 9
+			3 1 2
+			4 1 1
+			5 1 2
+			6 1 1
+			26 1 9
+			33 1 10
+			11 2 34
+			14 3 1
+			15 3 2
+			16 3 1
+			17 3 6
+			18 3 2
+			24 4 34>;
+		mediatek,recv-table = <1 0 2 0
+			2 0 26 0
+			7 1 2 0
+			8 1 10 0
+			9 1 1 0
+			10 1 2 0
+			27 1 2 0
+			28 1 5 0
+			5 1 1 1
+			34 1 10 0
+			12 2 30 0
+			20 3 10 0
+			21 3 6 0
+			22 3 1 0
+			23 3 2 0
+			15 3 1 1
+			25 4 30 0>;
+		mediatek,topckgen = <&topckgen>;
+		mediatek,infracfg = <&ufs_infracfg>;
+		memory-region = <&scp_firmware_mem>, <&scp_share_mem>;
+		memory-region-names = "firmware", "share";
+		status = "disabled";
+	};
+
+	scp-observe@10730000 {
+		compatible = "realme,op6893-scp-observe";
+		clocks = <&topckgen CLK_TOP_SCP>;
+		clock-names = "scp";
+		reg = <0 0x10730000 0 0x1000>,
+		      <0 0x10500000 0 0x180000>,
+		      <0 0x107fb10c 0 4>,
+		      <0 0x107fc10c 0 4>,
+		      <0 0x107fd10c 0 4>,
+		      <0 0x107fe10c 0 4>,
+		      <0 0x107ff10c 0 4>;
+		reg-names = "core0", "tcm", "mbox0-clr", "mbox1-clr",
+			    "mbox2-clr", "mbox3-clr", "mbox4-clr";
+		interrupts = <GIC_SPI 436 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 437 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 438 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 440 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "mbox0", "mbox1", "mbox2", "mbox3", "mbox4";
+		mediatek,send-table = <0 0 9
+			3 1 2
+			4 1 1
+			5 1 2
+			6 1 1
+			26 1 9
+			33 1 10
+			11 2 34
+			14 3 1
+			15 3 2
+			16 3 1
+			17 3 6
+			18 3 2
+			24 4 34>;
+		mediatek,recv-table = <1 0 2 0
+			2 0 26 0
+			7 1 2 0
+			8 1 10 0
+			9 1 1 0
+			10 1 2 0
+			27 1 2 0
+			28 1 5 0
+			5 1 1 1
+			34 1 10 0
+			12 2 30 0
+			20 3 10 0
+			21 3 6 0
+			22 3 1 0
+			23 3 2 0
+			15 3 1 1
+			25 4 30 0>;
+		mediatek,topckgen = <&topckgen>;
+		memory-region = <&scp_firmware_mem>, <&scp_share_mem>;
+		memory-region-names = "firmware", "share";
+		status = "disabled";
+	};
+
+	/* Framework references only; no power-domain or reset attachment. */
+	modem-resources {
+		compatible = "realme,op6893-modem-resources";
+		md-vmodem-supply = <&mt6315_3_vbuck1>;
+		md-vnr-supply = <&mt6315_3_vbuck3>;
+		md-vsram-supply = <&mt6315_3_vbuck4>;
+		md-vdigrf-supply = <&mt6359_vpu>;
+		clocks = <&ufs_infracfg CLK_IFRAO_CCIF_AP>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF_MD>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF1_AP>,
+			 <&ufs_infracfg CLK_IFRAO_CCIF1_MD>;
+		clock-names = "ccif-ap", "ccif-md", "ccif1-ap", "ccif1-md";
+		status = "disabled";
+	};
+
+	/* No default pin state; a rail cycle requires an explicit trigger. */
+	conn-preflight {
+		compatible = "realme,op6893-conn-preflight";
+		realme,allow-inherited-parent-rail-cycle;
+		realme,allow-conn-domain-cycle;
+		pinctrl-names = "conn-active", "conn-idle", "strap-prepare",
+				"strap-high", "strap-mux", "strap-low", "strap-input";
+		pinctrl-0 = <&conn_active_pins &conn180_active>;
+		pinctrl-1 = <&conn_idle_pins>;
+		pinctrl-2 = <&conn_active_pins &conn180_prepare>;
+		pinctrl-3 = <&conn_active_pins &conn180_high>;
+		pinctrl-4 = <&conn_active_pins &conn180_mux>;
+		pinctrl-5 = <&conn_active_pins &conn180_low>;
+		pinctrl-6 = <&conn_active_pins &conn180_input>;
+		mediatek,pmic-wrapper = <&pwrap>;
+		vs1-supply = <&mt6359_vs1>;
+		vs2-supply = <&mt6359_vs2>;
+		vcn13-supply = <&mt6359_vcn13>;
+		vcn18-supply = <&mt6359_vcn18>;
+		vcn33-1-supply = <&mt6359_vcn33_1>;
+		vcn33-2-supply = <&mt6359_vcn33_2>;
+	};
+
+	/* ACK nominal rate; oscillator calibration/control remain inherited. */
+	ulposc: oscillator-ulposc {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <260000000>;
+		clock-output-names = "mt6893_ulposc";
+	};
+
+	/*
+	 * I2C0 source clock (i2c_sel = univpll_d5_d4) and its gates on
+	 * imp_iic_wrap_c / infracfg_ao are left running by the bootloader;
+	 * there is no MT6893 clock driver for them yet.
+	 */
+	i2c_ck: clock-i2c {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <124800000>;
+		clock-output-names = "i2c_ck_inherited";
+	};
+
+	/* 4500 mAh single cell, 4.4 V float (vendor: oplus_batt_4400mv). */
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion-polymer";
+		charge-full-design-microamp-hours = <4500000>;
+		voltage-min-design-microvolt = <3300000>;
+		voltage-max-design-microvolt = <4400000>;
+		/*
+		 * 25 C OCV curve, resampled every 5 % from the vendor gauge
+		 * profile (mt6893_battery_table_ext_cupid.dtsi, profile_t1).
+		 */
+		ocv-capacity-celsius = <25>;
+		ocv-capacity-table-0 = <4409700 100>, <4361616 95>, <4308150 90>,
+			<4250212 85>, <4190820 80>, <4133481 75>, <4079715 70>,
+			<4029777 65>, <3980500 60>, <3916290 55>, <3880550 50>,
+			<3852323 45>, <3829900 40>, <3810637 35>, <3791403 30>,
+			<3764981 25>, <3742580 20>, <3711975 15>, <3693301 10>,
+			<3617634 5>, <3263200 0>;
+	};
+
+	/*
+	 * Voltage-based battery view. There is no fuel gauge driver, and the
+	 * MT6360 IBAT channel only reports charge current, so no current is
+	 * exposed; capacity is a rough estimate from the OCV table, and status
+	 * follows the MT6360 charger.
+	 */
+	fuel-gauge {
+		compatible = "adc-battery";
+		power-supplies = <&mt6360_chg>;
+		io-channels = <&mt6359_auxadc MT6359_AUXADC_BATADC>;
+		io-channel-names = "voltage";
+		monitored-battery = <&battery>;
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&volume_down_pins>;
+
+		key-volume-down {
+			label = "Volume Down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			gpios = <&pio 155 GPIO_ACTIVE_LOW>;
+			debounce-interval = <32>;
+		};
+	};
+
+	/* Experimental: LK leaves the PMIC rail on; no PMIC control yet. */
+	vusb33_boot: regulator-vusb33-boot {
+		compatible = "regulator-fixed";
+		regulator-name = "vusb33-lk-inherited";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	/*
+	 * LK buffer 2 inside mblock-18-framebuffer (imported from LK, so already
+	 * reserved). Scanned out by OVL layer 0 once op6893-fbkick points it
+	 * here and keeps the command-mode panel refreshed.
+	 */
+	framebuffer@796fc000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0x796fc000 0x0 0x9f6000>;
+		width = <1080>;
+		height = <2400>;
+		stride = <(1088 * 4)>;
+		format = "a8r8g8b8";	/* OVL layers use per-pixel alpha */
+	};
+
+	fbkick {
+		compatible = "op6893,fbkick";
+		op6893,framebuffer = <0x796fc000>;
+	};
+
+	/* RAM and reservations are imported from this boot's LK FDT. */
+	chosen {
+		bootargs = "rdinit=/init maxcpus=8 loglevel=8 ignore_loglevel initcall_debug clk_ignore_unused regulator_ignore_unused fw_devlink=off panic=0 ramoops.mem_address=0x48090000 ramoops.mem_size=0xe0000 ramoops.record_size=0x20000 ramoops.console_size=0x40000 ramoops.pmsg_size=0x10000 ramoops.ftrace_size=0x1000 ramoops.ecc=0 console=tty0";
+	};
+};
+
+&watchdog {
+	timeout-sec = <30>;
+	status = "okay";
+};
+
+&usb0 {
+	/* Existing clock placeholders rely on LK leaving real gates enabled. */
+	vusb33-supply = <&vusb33_boot>;
+	phys = <&u2port0 PHY_TYPE_USB2>;
+	phy-names = "usb2-phy";
+	mediatek,u3p-dis-msk = <1>;
+	status = "okay";
+};
+
+&tphy {
+	status = "okay";
+};
+
+&u2port0 {
+	clocks = <&clk26m>;
+	clock-names = "ref";
+	mediatek,eye-vrt = <6>;
+	mediatek,eye-term = <6>;
+	status = "okay";
+};
+
+&{/soc} {
+	apmixedsys: clock-controller@1000c000 {
+		compatible = "mediatek,mt6893-apmixedsys";
+		reg = <0 0x1000c000 0 0x1000>;
+		#clock-cells = <1>;
+		clocks = <&clk26m>;
+		clock-names = "clk26m";
+	};
+
+	topckgen: clock-controller@10000000 {
+		compatible = "mediatek,mt6893-topckgen", "syscon";
+		reg = <0 0x10000000 0 0x1000>;
+		#clock-cells = <1>;
+		clocks = <&ulposc>, <&clk26m>, <&apmixedsys CLK_APMIXED_MAINPLL>;
+		clock-names = "ulposc", "clk26m", "mainpll";
+	};
+
+	/*
+	 * SPM power controller, GPU domains and an opt-in MD1 domain. CONN stays
+	 * with the vendor conninfra driver and is not described here. The MFG
+	 * clock mux and MFGPLL are left as LK set them (mfgpll, ~350 MHz).
+	 */
+	scpsys: syscon@10006000 {
+		compatible = "mediatek,mt6893-scpsys", "syscon", "simple-mfd";
+		reg = <0 0x10006000 0 0x1000>;
+
+		spm: power-controller {
+			compatible = "mediatek,mt6893-power-controller";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			#power-domain-cells = <1>;
+
+			md1: power-domain@MT6893_POWER_DOMAIN_MD1 {
+				reg = <MT6893_POWER_DOMAIN_MD1>;
+				#power-domain-cells = <0>;
+				mediatek,infracfg = <&ufs_infracfg>;
+				status = "disabled";
+			};
+
+			mfg0: power-domain@MT6893_POWER_DOMAIN_MFG0 {
+				reg = <MT6893_POWER_DOMAIN_MFG0>;
+				domain-supply = <&mt6315_7_vbuck1>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#power-domain-cells = <1>;
+
+				mfg1: power-domain@MT6893_POWER_DOMAIN_MFG1 {
+					reg = <MT6893_POWER_DOMAIN_MFG1>;
+					domain-supply = <&mt6359_vsram_others>;
+					mediatek,infracfg = <&ufs_infracfg>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+					#power-domain-cells = <1>;
+
+					power-domain@MT6893_POWER_DOMAIN_MFG2 {
+						reg = <MT6893_POWER_DOMAIN_MFG2>;
+						#power-domain-cells = <0>;
+					};
+
+					power-domain@MT6893_POWER_DOMAIN_MFG3 {
+						reg = <MT6893_POWER_DOMAIN_MFG3>;
+						#power-domain-cells = <0>;
+					};
+
+					power-domain@MT6893_POWER_DOMAIN_MFG4 {
+						reg = <MT6893_POWER_DOMAIN_MFG4>;
+						#power-domain-cells = <0>;
+					};
+
+					power-domain@MT6893_POWER_DOMAIN_MFG5 {
+						reg = <MT6893_POWER_DOMAIN_MFG5>;
+						#power-domain-cells = <0>;
+					};
+
+					power-domain@MT6893_POWER_DOMAIN_MFG6 {
+						reg = <MT6893_POWER_DOMAIN_MFG6>;
+						#power-domain-cells = <0>;
+					};
+				};
+			};
+		};
+	};
+
+	/*
+	 * Static segment-2 table from 4.19 mtk_gpufreq_internal_plat.h.
+	 * Above 836 MHz vgpu rises to 0.80 V and vsram_others follows it
+	 * through the MediaTek regulator coupler.
+	 */
+	gpu_opp_table: opp-table-gpu {
+		compatible = "operating-points-v2";
+
+		opp-350000000 {
+			opp-hz = /bits/ 64 <350000000>;
+			opp-microvolt = <600000>;
+		};
+		opp-390000000 {
+			opp-hz = /bits/ 64 <390000000>;
+			opp-microvolt = <606250>;
+		};
+		opp-451000000 {
+			opp-hz = /bits/ 64 <451000000>;
+			opp-microvolt = <618750>;
+		};
+		opp-512000000 {
+			opp-hz = /bits/ 64 <512000000>;
+			opp-microvolt = <625000>;
+		};
+		opp-593000000 {
+			opp-hz = /bits/ 64 <593000000>;
+			opp-microvolt = <637500>;
+		};
+		opp-675000000 {
+			opp-hz = /bits/ 64 <675000000>;
+			opp-microvolt = <650000>;
+		};
+		opp-755000000 {
+			opp-hz = /bits/ 64 <755000000>;
+			opp-microvolt = <700000>;
+		};
+		opp-836000000 {
+			opp-hz = /bits/ 64 <836000000>;
+			opp-microvolt = <750000>;
+		};
+		opp-848000000 {
+			opp-hz = /bits/ 64 <848000000>;
+			opp-microvolt = <762500>;
+		};
+		opp-861000000 {
+			opp-hz = /bits/ 64 <861000000>;
+			opp-microvolt = <775000>;
+		};
+		opp-873000000 {
+			opp-hz = /bits/ 64 <873000000>;
+			opp-microvolt = <787500>;
+		};
+		opp-886000000 {
+			opp-hz = /bits/ 64 <886000000>;
+			opp-microvolt = <800000>;
+		};
+	};
+
+	/*
+	 * Mali-G77 MC9. Bring-up: panfrost is a module and is loaded by
+	 * hand after the GPU probe below has powered the domains.
+	 */
+	gpu: gpu@13000000 {
+		compatible = "mediatek,mt6893-mali", "arm,mali-valhall-jm";
+		reg = <0 0x13000000 0 0x4000>;
+		interrupts = <GIC_SPI 364 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 363 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 362 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "job", "mmu", "gpu";
+		clocks = <&topckgen CLK_TOP_MFG_SEL>;
+		mali-supply = <&mt6315_7_vbuck1>;
+		operating-points-v2 = <&gpu_opp_table>;
+		#cooling-cells = <2>;
+		power-domains = <&spm MT6893_POWER_DOMAIN_MFG1>,
+				<&spm MT6893_POWER_DOMAIN_MFG2>,
+				<&spm MT6893_POWER_DOMAIN_MFG3>,
+				<&spm MT6893_POWER_DOMAIN_MFG4>,
+				<&spm MT6893_POWER_DOMAIN_MFG5>,
+				<&spm MT6893_POWER_DOMAIN_MFG6>;
+		power-domain-names = "core0", "core1", "core2", "core3",
+				     "core4", "core5";
+	};
+
+	/* Bring-up only: powers the GPU on request (debugfs), reads its ID. */
+	gpu-probe {
+		compatible = "realme,op6893-gpu-probe";
+		reg = <0 0x13000000 0 0x4000>, <0 0x13fbf000 0 0x1000>;
+		reg-names = "gpu", "mfgcfg";
+		power-domains = <&spm MT6893_POWER_DOMAIN_MFG1>,
+				<&spm MT6893_POWER_DOMAIN_MFG2>,
+				<&spm MT6893_POWER_DOMAIN_MFG3>,
+				<&spm MT6893_POWER_DOMAIN_MFG4>,
+				<&spm MT6893_POWER_DOMAIN_MFG5>,
+				<&spm MT6893_POWER_DOMAIN_MFG6>;
+		power-domain-names = "mfg1", "mfg2", "mfg3", "mfg4", "mfg5", "mfg6";
+	};
+
+	/* SPMI master clock mux, left as LK set it (no topckgen mux driver). */
+	spmimst_ck: spmimst-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "spmimst_ck_inherited";
+	};
+
+	/*
+	 * PMIF/SPMI as LK left it: the driver programs no arbiter or master
+	 * registers on probe, it only uses SW channel 2.
+	 */
+	spmi: spmi@10027000 {
+		compatible = "mediatek,mt6873-spmi";
+		reg = <0 0x10027000 0 0x000e00>,
+		      <0 0x10029000 0 0x000100>;
+		reg-names = "pmif", "spmimst";
+		clocks = <&ufs_infracfg CLK_IFRAO_PMIC_AP>,
+			 <&ufs_infracfg CLK_IFRAO_PMIC_TMR>,
+			 <&spmimst_ck>;
+		clock-names = "pmif_sys_ck", "pmif_tmr_ck", "spmimst_clk_mux";
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		/*
+		 * MD rails: describe wiring only. Keep the whole SPMI device
+		 * disabled until voltage ownership and shutdown are validated.
+		 */
+		mt6315_3: pmic@3 {
+			compatible = "mediatek,mt6315-regulator";
+			reg = <0x3 SPMI_USID>;
+			status = "disabled";
+
+			regulators {
+				mt6315_3_vbuck1: vbuck1 {
+					regulator-name = "vmodem";
+				};
+
+				mt6315_3_vbuck3: vbuck3 {
+					regulator-name = "vnr";
+				};
+
+				mt6315_3_vbuck4: vbuck4 {
+					regulator-name = "vsram_md";
+				};
+			};
+		};
+
+		/*
+		 * MT6315 SID 7: vbuck1 is VGPU, vbuck3 is PROC2 (big CPU).
+		 * VGPU is clamped to the 0.60-0.75 V range of the GPU OPP
+		 * table; ramp delays follow the mt8195 GPU buck.
+		 */
+		mt6315_7: pmic@7 {
+			compatible = "mediatek,mt6315-regulator";
+			reg = <0x7 SPMI_USID>;
+
+			regulators {
+				mt6315_7_vbuck1: vbuck1 {
+					regulator-name = "vgpu";
+					regulator-min-microvolt = <600000>;
+					regulator-max-microvolt = <800000>;
+					regulator-ramp-delay = <6250>;
+					regulator-enable-ramp-delay = <256>;
+					regulator-coupled-with = <&mt6359_vsram_others>;
+					regulator-coupled-max-spread = <10000>;
+				};
+
+				mt6315_7_vbuck3: vbuck3 {
+					regulator-name = "vproc2";
+				};
+			};
+		};
+	};
+
+	/* Diagnostic transport: SPI setup and clock rates remain inherited. */
+	pwrap: pwrap@10026000 {
+		compatible = "mediatek,mt6885-pwrap";
+		reg = <0 0x10026000 0 0x1000>,
+		      <0 0x10028000 0 0x1000>;
+		reg-names = "pwrap", "spi_mst";
+		interrupts = <GIC_SPI 220 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ufs_infracfg CLK_IFRAO_PMIC_AP>,
+			 <&ufs_infracfg CLK_IFRAO_PMIC_TMR>,
+			 <&topckgen CLK_TOP_PWRAP_ULPOSC_SEL>,
+			 <&topckgen CLK_TOP_OSC_D10>;
+		clock-names = "spi", "wrap", "ulposc", "ulposc_osc";
+
+		pmic {
+			compatible = "mediatek,mt6359";
+			interrupt-parent = <&pio>;
+			interrupts = <222 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			vs1-ldo2-supply = <&mt6359_vs1>;
+			vs2-ldo2-supply = <&mt6359_vs2>;
+
+			/*
+			 * Register inherited supplies without applying voltage, mode
+			 * or boot-on constraints. Diagnostic rail votes are explicit.
+			 * Keep regulator_ignore_unused until ownership is complete.
+			 */
+			regulators {
+				compatible = "mediatek,mt6359-regulator";
+
+				mt6359_vs1: buck_vs1 {
+					regulator-name = "vs1";
+				};
+
+				mt6359_vs2: buck_vs2 {
+					regulator-name = "vs2";
+				};
+
+				/* ACK uses VPU as VRFDIG; no MD consumer yet. */
+				mt6359_vpu: buck_vpu {
+					regulator-name = "vdigrf";
+					status = "disabled";
+				};
+
+				mt6359_vcn13: ldo_vcn13 {
+					regulator-name = "vcn13";
+				};
+
+				mt6359_vcn18: ldo_vcn18 {
+					regulator-name = "vcn18";
+				};
+
+				mt6359_vcn33_1: ldo_vcn33_1 {
+					regulator-name = "vcn33_1";
+				};
+
+				mt6359_vcn33_1_bt: ldo_vcn33_1_bt {
+					regulator-name = "vcn33_1_bt";
+				};
+				mt6359_vcn33_1_wifi: ldo_vcn33_1_wifi {
+					regulator-name = "vcn33_1_wifi";
+				};
+				mt6359_vcn33_2_wifi: ldo_vcn33_2_wifi {
+					regulator-name = "vcn33_2_wifi";
+				};
+				mt6359_vcn33_2: ldo_vcn33_2 {
+					regulator-name = "vcn33_2";
+				};
+				/*
+				 * GPU SRAM rail in the vendor tree: shared
+				 * regulator, tracks vgpu through the MediaTek
+				 * regulator coupler (vsram = max(0.75 V, vgpu)).
+				 */
+				mt6359_vsram_others: ldo_vsram_others {
+					regulator-name = "vsram_others";
+					regulator-min-microvolt = <750000>;
+					regulator-max-microvolt = <800000>;
+					regulator-coupled-with = <&mt6315_7_vbuck1>;
+					regulator-coupled-max-spread = <10000>;
+				};
+			};
+
+			mt6359_auxadc: adc {
+				compatible = "mediatek,mt6359-auxadc";
+				#io-channel-cells = <1>;
+			};
+
+			keys {
+				compatible = "mediatek,mt6359-keys";
+
+				power {
+					linux,keycodes = <KEY_POWER>;
+				};
+
+				home {
+					linux,keycodes = <KEY_VOLUMEUP>;
+				};
+			};
+		};
+	};
+
+	/* Reset register/bit mapping from the running ACK device tree. */
+	ufs_infracfg: syscon@10001000 {
+		compatible = "mediatek,mt6893-infracfg_ao", "syscon", "simple-mfd";
+		reg = <0 0x10001000 0 0x1000>;
+		#clock-cells = <1>;
+		clocks = <&topckgen CLK_TOP_FPWRAP_ULPOSC>, <&topckgen CLK_TOP_AXI>;
+		clock-names = "pwrap", "axi";
+
+		ufs_reset: reset-controller {
+			compatible = "ti,syscon-reset";
+			#reset-cells = <1>;
+			ti,reset-bits =
+				<0x130 15 0x134 15 0 0
+				 (ASSERT_SET | DEASSERT_SET | STATUS_NONE)>,
+				<0x140 7 0x144 7 0 0
+				 (ASSERT_SET | DEASSERT_SET | STATUS_NONE)>,
+				<0x150 21 0x154 21 0 0
+				 (ASSERT_SET | DEASSERT_SET | STATUS_NONE)>;
+		};
+	};
+
+	/*
+	 * LVTS thermal sensor blocks (same layout as MT8192). The
+	 * controllers are already running since LK; no resets property
+	 * so the driver never resets the block. SVS/EEM owns 0x1100bc00.
+	 * Calibration comes from /chosen "atag,devinfo", not efuse.
+	 */
+	lvts_ap: thermal-sensor@1100b000 {
+		compatible = "mediatek,mt6893-lvts-ap";
+		reg = <0 0x1100b000 0 0xc00>;
+		interrupts = <GIC_SPI 169 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ufs_infracfg CLK_IFRAO_THERM>;
+		#thermal-sensor-cells = <1>;
+	};
+
+	lvts_mcu: thermal-sensor@11278000 {
+		compatible = "mediatek,mt6893-lvts-mcu";
+		reg = <0 0x11278000 0 0x1000>;
+		interrupts = <GIC_SPI 170 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ufs_infracfg CLK_IFRAO_THERM>;
+		#thermal-sensor-cells = <1>;
+	};
+
+	ufs: ufs@11270000 {
+		compatible = "mediatek,mt8183-ufshci";
+		reg = <0 0x11270000 0 0x2300>;
+		interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>;
+		resets = <&ufs_reset 0>, <&ufs_reset 1>, <&ufs_reset 2>;
+		reset-names = "hci_rst", "unipro_rst", "crypto_rst";
+		/* Experimental: clocks, rails and PHY are inherited from LK. */
+		mediatek,ufs-disable-ah8;
+		/* Legacy controller reports the reserved LSDBS bit as set. */
+		mediatek,ufs-disable-mcq;
+	};
+};
+
+&pio {
+	/* Custom names prevent automatic boot/probe selection by driver core. */
+	conn_active_pins: conn-active-pins {
+		/* GPIO173/175/178-182 share the same drive field. */
+		pins-clocks-control {
+			pinmux = <PINMUX_GPIO172__FUNC_CONN_TOP_CLK>,
+				 <PINMUX_GPIO175__FUNC_CONN_WB_PTA>,
+				 <PINMUX_GPIO176__FUNC_CONN_BT_CLK>,
+				 <PINMUX_GPIO178__FUNC_CONN_WF_CTRL0>,
+				 <PINMUX_GPIO179__FUNC_CONN_WF_CTRL1>,
+				 <PINMUX_GPIO181__FUNC_CONN_WF_CTRL3>,
+				 <PINMUX_GPIO182__FUNC_CONN_WF_CTRL4>;
+			drive-strength = <4>;
+		};
+
+		pins-data {
+			pinmux = <PINMUX_GPIO173__FUNC_CONN_TOP_DATA>,
+				 <PINMUX_GPIO177__FUNC_CONN_BT_DATA>;
+			drive-strength = <4>;
+			bias-pull-up;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO174__FUNC_CONN_HRST_B>;
+			drive-strength = <2>;
+		};
+	};
+
+	conn180_active: conn180-active-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_CONN_WF_CTRL2>;
+		};
+	};
+
+	conn180_prepare: conn180-prepare-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_CONN_WF_CTRL2>;
+			output-high;
+		};
+	};
+
+	conn180_high: conn180-high-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_GPIO180>;
+		};
+	};
+
+	conn180_mux: conn180-mux-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_CONN_WF_CTRL2>;
+		};
+	};
+
+	conn180_low: conn180-low-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_CONN_WF_CTRL2>;
+			output-low;
+		};
+	};
+
+	conn180_input: conn180-input-pins {
+		pins-strap {
+			pinmux = <PINMUX_GPIO180__FUNC_CONN_WF_CTRL2>;
+			output-disable;
+		};
+	};
+
+	conn_idle_pins: conn-idle-pins {
+		pins-clocks-control-reset {
+			pinmux = <PINMUX_GPIO172__FUNC_GPIO172>,
+				 <PINMUX_GPIO174__FUNC_GPIO174>,
+				 <PINMUX_GPIO175__FUNC_GPIO175>,
+				 <PINMUX_GPIO176__FUNC_GPIO176>,
+				 <PINMUX_GPIO178__FUNC_GPIO178>,
+				 <PINMUX_GPIO179__FUNC_GPIO179>,
+				 <PINMUX_GPIO180__FUNC_GPIO180>,
+				 <PINMUX_GPIO181__FUNC_GPIO181>,
+				 <PINMUX_GPIO182__FUNC_GPIO182>;
+		};
+
+		pins-data {
+			pinmux = <PINMUX_GPIO173__FUNC_GPIO173>,
+				 <PINMUX_GPIO177__FUNC_GPIO177>;
+			bias-pull-down;
+		};
+	};
+
+	/* Values match what LK programs: pull-up with RSEL 3, Schmitt on. */
+	i2c0_pins: i2c0-pins {
+		pins-bus {
+			pinmux = <PINMUX_GPIO204__FUNC_SCL0>,
+				 <PINMUX_GPIO205__FUNC_SDA0>;
+			bias-pull-up = <MTK_PULL_SET_RSEL_011>;
+			input-schmitt-enable;
+		};
+	};
+
+	i2c5_pins: i2c5-pins {
+		pins-bus {
+			pinmux = <PINMUX_GPIO202__FUNC_SCL5>,
+				 <PINMUX_GPIO203__FUNC_SDA5>;
+			bias-pull-up = <MTK_PULL_SET_RSEL_011>;
+			input-schmitt-enable;
+		};
+	};
+
+	touch_pins: touch-pins {
+		pins-int {
+			pinmux = <PINMUX_GPIO21__FUNC_GPIO21>;
+			input-enable;
+			bias-pull-up;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO20__FUNC_GPIO20>;
+			output-high;
+		};
+	};
+
+	volume_down_pins: volume-down-pins {
+		pins-key {
+			pinmux = <PINMUX_GPIO155__FUNC_GPIO155>;
+			input-enable;
+		};
+	};
+};
+
+/ {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Names match LK so merging updates these nodes rather than duplicating them. */
+		scp_firmware_mem: mblock-21-SCP-reserved {
+			reg = <0 0x9fa00000 0 0x500000>;
+			no-map;
+		};
+
+		/* Allocate locally; never pin the address observed in ACK. */
+		scp_share_mem: reserve-memory-scp_share {
+			size = <0 0x320000>;
+			alignment = <0 0x1000000>;
+			alloc-ranges = <0 0x50000000 0 0x40000000>;
+			no-map;
+		};
+
+		ccci_tag: mblock-22-ccci_tag_mem {
+			reg = <0 0xbff70000 0 0x10000>;
+			no-map;
+		};
+
+		md_nc_smem: mblock-27-ap_md_nc_smem {
+			reg = <0 0x8e000000 0 0x1800000>;
+			no-map;
+		};
+
+		md_c_smem: mblock-28-ap_md_c_smem {
+			reg = <0 0x88000000 0 0x4960000>;
+			no-map;
+		};
+
+			op6893-crumb {
+			reg = <0x0 0x48180000 0x0 0x1000>;
+			no-map;
+		};
+
+		wifi_mem: wifi-mem {
+			compatible = "shared-dma-pool";
+			no-map;
+			size = <0x0 0xf20000>;
+			alloc-ranges = <0x0 0x40000000 0x0 0x80000000>;
+			alignment = <0x0 0x1000000>;
+		};
+
+		consys_mem: consys-mem {
+			compatible = "mediatek,consys-reserve-memory";
+			size = <0x0 0x450000>;
+			alignment = <0x0 0x100000>;
+			alloc-ranges = <0x0 0x50000000 0x0 0x40000000>;
+			no-map;
+		};
+	};
+
+	consys@18000000 {
+		compatible = "mediatek,mt6893-consys";
+		pmic = <&pwrap>;
+		vcn13-supply = <&mt6359_vcn13>;
+		vcn18-supply = <&mt6359_vcn18>;
+		vcn33_1_bt-supply = <&mt6359_vcn33_1_bt>;
+		vcn33_1_wifi-supply = <&mt6359_vcn33_1_wifi>;
+		vcn33_2_wifi-supply = <&mt6359_vcn33_2_wifi>;
+		reg = <0x0 0x18000000 0x0 0x1000
+		       0x0 0x18001000 0x0 0x1000
+		       0x0 0x18060000 0x0 0x10000
+		       0x0 0x10001000 0x0 0x1000
+		       0x0 0x10007000 0x0 0x1000
+		       0x0 0x10006000 0x0 0x1000
+		       0x0 0x1020e000 0x0 0x1000
+		       0x0 0x18005000 0x0 0x1000
+		       0x0 0x18003000 0x0 0x1000
+		       0x0 0x18050000 0x0 0x10000
+		       0x0 0x10005000 0x0 0x1000
+		       0x0 0x18004000 0x0 0x1000
+		       0x0 0x18070000 0x0 0x10000
+		       0x0 0x18002000 0x0 0x1000
+		       0x0 0x11ea0000 0x0 0x1000
+		       0x0 0x1800f000 0x0 0x1000>;
+		memory-region = <&consys_mem>;
+	};
+};
+
+/ {
+	btif_clk: btif_clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <26000000>;
+		clock-output-names = "btif";
+	};
+
+	btif@1100c000 {
+		compatible = "mediatek,btif";
+		reg = <0x0 0x1100c000 0x0 0x1000>,
+		      <0x0 0x11000d80 0x0 0x80>,
+		      <0x0 0x11000e00 0x0 0x80>;
+		interrupts = <0 0x9e 4>, <0 0x98 4>, <0 0x99 4>;
+		clocks = <&btif_clk>, <&btif_clk>;
+		clock-names = "btifc", "apdmac";
+		status = "okay";
+	};
+
+	wifi: wifi@18000000 {
+		compatible = "mediatek,wifi";
+		reg = <0x0 0x18000000 0x0 0x700000>;
+		interrupts = <0 0x177 4>, <0 0x17a 4>;
+		memory-region = <&wifi_mem>;
+		flavor_bin = "a";
+		emi-addr = <0>;
+		emi-size = <0xf20000>;
+		emi-alignment = <0x1000000>;
+		emi-max-addr = <0xC0000000>;
+		nvmem-cells = <&wifi_mac>;
+		nvmem-cell-names = "mac-address";
+		status = "okay";
+	};
+
+	bt@18000000 {
+		compatible = "mediatek,bt";
+		flavor_bin = "a";
+		reg = <0x0 0x18000000 0x0 0x1000>,
+		      <0x0 0x18001000 0x0 0x1000>,
+		      <0x0 0x18050000 0x0 0x1000>,
+		      <0x0 0x18060000 0x0 0x1000>,
+		      <0x0 0x18800000 0x0 0x1000>,
+		      <0x0 0x18812000 0x0 0x1000>,
+		      <0x0 0x10001000 0x0 0x1000>;
+		interrupts = <0 0x178 4>, <0 0x179 4>;
+		nvmem-cells = <&bt_bdaddr>;
+		nvmem-cell-names = "bd-address";
+		status = "okay";
+	};
+
+	/*
+	 * Per-unit addresses, not patched into DT by the bootloader. They sit
+	 * at fixed offsets in the raw proinfo partition (same bytes as
+	 * /nvdata/APCFG/APRDEB/{BT_Addr,WIFI+4}); values deliberately not
+	 * recorded here.
+	 */
+	proinfo_nvmem: nvmem {
+		compatible = "mediatek,partition-nvmem";
+		partition-label = "proinfo";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		bt_bdaddr: bd-address@68 {
+			reg = <0x68 6>;
+		};
+
+		wifi_mac: mac-address@6e {
+			reg = <0x6e 6>;
+		};
+	};
+};
+
+&{/soc} {
+	i2c0: i2c@11015000 {
+		compatible = "mediatek,mt8192-i2c";
+		reg = <0 0x11015000 0 0x1000>,
+		      <0 0x11000080 0 0x80>;
+		interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&i2c_ck>, <&i2c_ck>;
+		clock-names = "main", "dma";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c0_pins>;
+		clock-div = <1>;
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		touchscreen@38 {
+			compatible = "focaltech,ft3518";
+			reg = <0x38>;
+			interrupts-extended = <&pio 21 IRQ_TYPE_LEVEL_LOW>;
+			reset-gpios = <&pio 20 GPIO_ACTIVE_LOW>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&touch_pins>;
+			vcc-supply = <&mt6360_ldo2>;
+			touchscreen-size-x = <1080>;
+			touchscreen-size-y = <2400>;
+		};
+	};
+};
+
+&{/soc} {
+	/*
+	 * PMIC bus: MT6360 (0x34 PMU, 0x1a PMIC, 0x64 LDO). The clock gate
+	 * on imp_iic_wrap_n is inherited from LK.
+	 */
+	i2c5: i2c@11f00000 {
+		compatible = "mediatek,mt8192-i2c";
+		reg = <0 0x11f00000 0 0x1000>,
+		      <0 0x11000500 0 0x80>;
+		interrupts = <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&i2c_ck>, <&i2c_ck>;
+		clock-names = "main", "dma";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c5_pins>;
+		clock-div = <1>;
+		clock-frequency = <100000>;
+		mediatek,use-push-pull;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pmic@34 {
+			compatible = "mediatek,mt6360";
+			reg = <0x34>;
+			interrupts-extended = <&pio 24 IRQ_TYPE_LEVEL_LOW>;
+			interrupt-names = "IRQB";
+			interrupt-controller;
+			#interrupt-cells = <1>;
+
+			mt6360_adc: adc {
+				compatible = "mediatek,mt6360-adc";
+				#io-channel-cells = <1>;
+			};
+
+			mt6360_chg: charger {
+				compatible = "mediatek,mt6360-chg";
+				richtek,vinovp-microvolt = <6500000>;
+			};
+
+			regulator {
+				compatible = "mediatek,mt6360-regulator";
+
+				/* Touch panel supply (vendor "vtp", 3.0 V). */
+				mt6360_ldo2: ldo2 {
+					regulator-name = "vtp";
+					regulator-min-microvolt = <3000000>;
+					regulator-max-microvolt = <3000000>;
+				};
+			};
+		};
+	};
+};
+
+/ {
+	thermal_zones: thermal-zones {
+	/*
+	 * GPU temperature is the two AP-domain sensors feeding the MFG
+	 * block (MT8192_AP_GPU0/GPU1). Both trip the same cooling device.
+	 */
+	gpu0-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <250>;
+		thermal-sensors = <&lvts_ap MT8192_AP_GPU0>;
+
+		trips {
+			gpu0_alert: trip-alert {
+				temperature = <85000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+
+			gpu0_crit: trip-crit {
+				temperature = <100000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
+
+		cooling-maps {
+			map0 {
+				trip = <&gpu0_alert>;
+				cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			};
+		};
+	};
+
+	gpu1-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <250>;
+		thermal-sensors = <&lvts_ap MT8192_AP_GPU1>;
+
+		trips {
+			gpu1_alert: trip-alert {
+				temperature = <85000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+
+			gpu1_crit: trip-crit {
+				temperature = <100000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
+
+		cooling-maps {
+			map0 {
+				trip = <&gpu1_alert>;
+				cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			};
+		};
+	};
+
+	/* Read-only observation zones: no cooling device exists yet. */
+	cpu-little-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <250>;
+		thermal-sensors = <&lvts_mcu MT8192_MCU_LITTLE_CPU0>;
+
+		trips {
+			cpu_little_alert: trip-alert {
+				temperature = <85000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+
+			cpu_little_crit: trip-crit {
+				temperature = <100000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
+	};
+
+	cpu-big-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <250>;
+		thermal-sensors = <&lvts_mcu MT8192_MCU_BIG_CPU0>;
+
+		trips {
+			cpu_big_alert: trip-alert {
+				temperature = <85000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+
+			cpu_big_crit: trip-crit {
+				temperature = <100000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
+	};
+
+	soc-thermal {
+		polling-delay = <1000>;
+		polling-delay-passive = <250>;
+		thermal-sensors = <&lvts_ap MT8192_AP_INFRA>;
+
+		trips {
+			soc_alert: trip-alert {
+				temperature = <85000>;
+				hysteresis = <2000>;
+				type = "passive";
+			};
+
+			soc_crit: trip-crit {
+				temperature = <100000>;
+				hysteresis = <2000>;
+				type = "critical";
+			};
+		};
+	};
+};
+};
+
+/* Observed modem DVFS and LK boot settings; restoration is off-only. */
+&mt6315_3_vbuck1 {
+	regulator-min-microvolt = <550000>;
+	regulator-max-microvolt = <800000>;
+};
+
+&mt6315_3_vbuck3 {
+	regulator-min-microvolt = <600000>;
+	regulator-max-microvolt = <800000>;
+};
+
+&mt6359_vpu {
+	regulator-min-microvolt = <650000>;
+	regulator-max-microvolt = <700000>;
+};

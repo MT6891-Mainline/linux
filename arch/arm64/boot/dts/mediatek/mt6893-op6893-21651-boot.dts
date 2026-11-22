@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "mt6893-op6893-boot.dts"
+
+/ {
+	model = "op6893 21651 (direct LK bring-up)";
+
+	/delete-node/ framebuffer@796fc000;
+	/delete-node/ fbkick;
+	/delete-node/ gpu-probe;
+
+	framebuffer@76e10000 {
+		compatible = "simple-framebuffer";
+		reg = <0 0x76e10000 0 0x9f6000>;
+		width = <1080>;
+		height = <2400>;
+		stride = <4352>;
+		format = "a8r8g8b8";
+		status = "disabled"; /* enabled only after LK reservation check */
+	};
+
+	fbkick {
+		compatible = "op6893,fbkick";
+		op6893,framebuffer = <0x76e10000>;
+		status = "disabled";
+	};
+
+	opp-table-gpu-21651 {
+		compatible = "operating-points-v2";
+
+		opp-350000000 {
+			opp-hz = /bits/ 64 <350000000>;
+			opp-microvolt = <600000>;
+		};
+	};
+};
+
+&gpu {
+	operating-points-v2 = <&{/opp-table-gpu-21651}>;
+};
+
+&watchdog {
+	compatible = "mediatek,mt6589-wdt", "syscon", "simple-mfd";
+
+	reboot-mode {
+		compatible = "syscon-reboot-mode";
+		offset = <0x24>;
+		mask = <0x0f>;
+		mode-bootloader = <3>;
+	};
+};
+
+&{/soc/i2c@11015000/touchscreen@38} {
+	compatible = "oneplus,op6893-21651-ft3518", "focaltech,ft3518";
+	interrupts-extended = <&pio 21 IRQ_TYPE_EDGE_FALLING>;
+};
+
+&mt6360_ldo2 {
+	regulator-min-microvolt = <2800000>;
+	regulator-max-microvolt = <2800000>;
+};
+
+/*
+ * Read-only LK handoff inspection. 21651 is flashed with 20615's LK and DTBO,
+ * so the mblock regions inherited from the shared board file are only an
+ * assumption until the tag header and the SMEM subregions are validated on
+ * this unit. The cold modem platform node stays disabled.
+ */
+&{/modem-handoff} {
+	status = "okay";
+};

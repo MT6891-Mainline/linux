@@ -151,6 +151,7 @@
  * which is a completely different diagnosis from "four stripes then nothing".
  */
 	.macro	bc_stuck	tag
+#ifdef CONFIG_ARM64_CHOPIN_LK_BOOT
 	ldr	x9, =0x7ffbf000 + 0x7f0
 	ldr	w10, =\tag
 	str	w10, [x9]
@@ -169,9 +170,11 @@
 	subs	x15, x15, #1
 	b.ne	7b
 	dmb	sy
+#endif
 	.endm
 
 	.macro	bc_tag	tag, off, stage
+#ifdef CONFIG_ARM64_CHOPIN_LK_BOOT
 	/* bootloader log_store ring -> LK relays it into the expdb partition.
 	 * Written twice: at \off in the high window and at 0x800+n*16 in the
 	 * low window, which is the range LK relays on every boot whether or not
@@ -207,6 +210,7 @@
 	fb_band	0x78e0c000, \stage, 0xff00ff00, 0xff00a000
 	fb_band	0x77a20000, \stage, 0xffff0000, 0xffa00000
 	dmb	sy
+#endif
 	.endm
 
 SYM_CODE_START(primary_entry)

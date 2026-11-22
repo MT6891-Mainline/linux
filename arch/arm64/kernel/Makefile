@@ -92,8 +92,21 @@ endif
 subdir- += vdso vdso32
 
 # The board device tree, embedded in the kernel image (see chopin-dtb.S).
-obj-y += chopin-dtb.o
+obj-$(CONFIG_ARM64_CHOPIN_LK_BOOT) += chopin-dtb.o
 # Build a private copy via the standard DTC rules, including DTS dependencies.
 # This also keeps parallel Image and dtbs builds from writing the same file.
 targets += chopin-board.dtb
 $(obj)/chopin-dtb.o: $(obj)/chopin-board.dtb
+
+obj-$(CONFIG_ARM64_OP6893_BRINGUP) += op6893-boot.o op6893-fdt.o op6893-dtb.o
+obj-$(CONFIG_ARM64_OP6893_FBKICK) += op6893-fbkick.o
+
+op6893-boot-dts := mt6893-op6893-boot.dts
+ifeq ($(CONFIG_ARM64_OP6893_21651),y)
+op6893-boot-dts := mt6893-op6893-21651-boot.dts
+endif
+
+$(obj)/op6893-embed.dtb: $(srctree)/arch/arm64/boot/dts/mediatek/$(op6893-boot-dts) $(DTC) FORCE
+	$(call if_changed_dep,dtc)
+$(obj)/op6893-dtb.o: $(obj)/op6893-embed.dtb
+targets += op6893-embed.dtb

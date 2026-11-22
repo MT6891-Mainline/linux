@@ -2594,6 +2594,29 @@ config DMI
 	  However, even with this option, the resultant kernel should
 	  continue to boot on existing non-UEFI platforms.
 
+config ARM64_CHOPIN_LK_BOOT
+	bool "Xiaomi Chopin LK boot handoff"
+	depends on ARCH_MEDIATEK
+	help
+	  Embed the Chopin device tree and enable the Chopin early boot
+	  breadcrumbs at board-specific physical addresses.
+
+config ARM64_OP6893_BRINGUP
+	bool "OP6893 LK boot handoff"
+	depends on ARCH_MEDIATEK && !ARM64_CHOPIN_LK_BOOT
+	select ARCH_USE_MEMREMAP_PROT
+	help
+	  Merge the LK bootloader memory layout and boot parameters with an
+	  embedded OP6893 device tree before the early memory scan.
+
+config ARM64_OP6893_21651
+	bool "Use the OP6893 21651 board device tree"
+	depends on ARM64_OP6893_BRINGUP
+
+config ARM64_OP6893_FBKICK
+	bool "OP6893 early framebuffer using the LK display handoff"
+	depends on ARM64_OP6893_BRINGUP && FB
+
 endmenu # "Boot options"
 
 menu "Power management options"
