@@ -18,6 +18,8 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME "@(%s:%d) " fmt, __func__, __LINE__
 
+#include <linux/soc/mediatek/op6893-conn.h>
+
 #include "consys_hw.h"
 #include "conninfra_core.h"
 #include "msg_thread.h"
@@ -214,6 +216,10 @@ static unsigned int opfunc_get_current_status(void)
 	unsigned int ret = 0;
 	unsigned int i;
 
+	if (op6893_conn_board() &&
+	    g_conninfra_ctx.infra_drv_status == DRV_STS_POWER_OFF)
+		return 0;
+
 	for (i = 0; i < CONNDRV_TYPE_MAX; i++) {
 		ret |= (g_conninfra_ctx.drv_inst[i].drv_status << i);
 	}
@@ -287,7 +293,9 @@ static int opfunc_power_on_internal(unsigned int drv_type)
 	}
 
 	/* check if func already on */
-	if (g_conninfra_ctx.drv_inst[drv_type].drv_status == DRV_STS_POWER_ON) {
+	if (g_conninfra_ctx.drv_inst[drv_type].drv_status == DRV_STS_POWER_ON &&
+	    (!op6893_conn_board() ||
+	     g_conninfra_ctx.infra_drv_status == DRV_STS_POWER_ON)) {
 		pr_warn("func(%d) already on\n", drv_type);
 		osal_unlock_sleepable_lock(&infra_ctx->core_lock);
 		return 0;
@@ -295,7 +303,17 @@ static int opfunc_power_on_internal(unsigned int drv_type)
 
 	/* POWER ON SEQUENCE */
 	conninfra_core_wake_lock_get();
-	ret = consys_hw_pwr_on(opfunc_get_current_status(), drv_type);
+	if (op6893_conn_board() && infra_ctx->infra_drv_status == DRV_STS_POWER_ON) {
+		unsigned int cur = opfunc_get_current_status();
+
+		if (!cur)
+			cur = 1U << CONNDRV_TYPE_CONNINFRA;
+		pr_info("[%s] infra pinned on, subsys-only power on drv(%d) cur=0x%x\n",
+			__func__, drv_type, cur);
+		ret = consys_hw_pwr_on(cur, drv_type);
+	} else {
+		ret = consys_hw_pwr_on(opfunc_get_current_status(), drv_type);
+	}
 	conninfra_core_wake_lock_put();
 
 	if (ret) {
@@ -343,6 +361,8 @@ static int opfunc_power_off_internal(unsigned int drv_type)
 	bool try_power_off = true;
 	struct conninfra_ctx *infra_ctx = &g_conninfra_ctx;
 	unsigned int curr_status = opfunc_get_current_status();
+	bool retain_power = op6893_conn_board();
+
 
 	/* Check abnormal type */
 	if (drv_type >= CONNDRV_TYPE_MAX) {
@@ -369,13 +389,15 @@ static int opfunc_power_off_internal(unsigned int drv_type)
 		atomic_set(&g_conninfra_ctx.power_dump_enable, 0);
 		if (g_conninfra_ctx.infra_drv_status == DRV_STS_POWER_OFF) {
 			pr_warn("Connsys already off, do nothing for force off\n");
+			osal_unlock_sleepable_lock(&infra_ctx->core_lock);
 			return 0;
 		}
 		/* Turn off subsys VCN and update record */
 		for (i = 0; i < CONNDRV_TYPE_MAX; i++) {
 			if (g_conninfra_ctx.drv_inst[i].drv_status ==
 			    DRV_STS_POWER_ON) {
-				opfunc_vcn_control_internal(i, false);
+				if (!retain_power)
+					opfunc_vcn_control_internal(i, false);
 				g_conninfra_ctx.drv_inst[i].drv_status =
 					DRV_STS_POWER_OFF;
 			}
@@ -383,7 +405,13 @@ static int opfunc_power_off_internal(unsigned int drv_type)
 
 		/* POWER OFF SEQUENCE */
 		conninfra_core_wake_lock_get();
-		ret = consys_hw_pwr_off(0, drv_type);
+		if (retain_power) {
+			pr_info("[%s] infra pinned on, skip infra off drv(%d)\n",
+				__func__, drv_type);
+			ret = 0;
+		} else {
+			ret = consys_hw_pwr_off(0, drv_type);
+		}
 		conninfra_core_wake_lock_put();
 
 		/* For force power off operation, ignore err code */
@@ -410,11 +438,16 @@ static int opfunc_power_off_internal(unsigned int drv_type)
 		if (try_power_off)
 			atomic_set(&g_conninfra_ctx.power_dump_enable, 0);
 		/* POWER OFF SEQUENCE */
-		/* VCNx disable */
-		opfunc_vcn_control_internal(drv_type, false);
-
 		conninfra_core_wake_lock_get();
-		ret = consys_hw_pwr_off(curr_status, drv_type);
+		if (retain_power && infra_ctx->infra_drv_status == DRV_STS_POWER_ON) {
+			pr_info("[%s] infra pinned on, skip subsys off drv(%d)\n",
+				__func__, drv_type);
+			ret = 0;
+		} else {
+			/* VCNx disable */
+			opfunc_vcn_control_internal(drv_type, false);
+			ret = consys_hw_pwr_off(curr_status, drv_type);
+		}
 		conninfra_core_wake_lock_put();
 
 		if (ret) {
@@ -425,7 +458,7 @@ static int opfunc_power_off_internal(unsigned int drv_type)
 		}
 	}
 
-	if (try_power_off)
+	if (try_power_off && !retain_power)
 		g_conninfra_ctx.infra_drv_status = DRV_STS_POWER_OFF;
 
 	pr_info("[Conninfra Pwr Off] Conninfra=[%d] BT=[%d] FM=[%d] GPS=[%d] WF=[%d]",
@@ -1920,7 +1953,8 @@ int conninfra_core_subsys_ops_reg(enum consys_drv_type type,
 	 * Bluetooth driver.  If BT is present, opfunc_pre_cal() will include it;
 	 * otherwise the calibration state machine runs with WiFi alone.
 	 */
-	if (infra_ctx->drv_inst[CONNDRV_TYPE_WIFI].ops_cb.pre_cal_cb.do_cal_cb !=
+	if (!op6893_conn_board() &&
+	    infra_ctx->drv_inst[CONNDRV_TYPE_WIFI].ops_cb.pre_cal_cb.do_cal_cb !=
 	    NULL)
 		trigger_pre_cal = 1;
 
@@ -2007,6 +2041,9 @@ void conninfra_core_pre_cal_blocking(void)
 	struct timespec64 start, end;
 	unsigned long diff;
 	static bool ever_pre_cal = false;
+
+	if (op6893_conn_board())
+		return;
 
 	if (g_pre_cal_mode == PRE_CAL_ALL_DISABLED) {
 		pr_info("g_pre_cal_mode == PRE_CAL_ALL_DISABLED\n");

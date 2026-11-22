@@ -99,6 +99,7 @@ targets += chopin-board.dtb
 $(obj)/chopin-dtb.o: $(obj)/chopin-board.dtb
 
 obj-$(CONFIG_ARM64_OP6893_BRINGUP) += op6893-boot.o op6893-fdt.o op6893-dtb.o
+obj-$(CONFIG_ARM64_OP6893_CONN_PREFLIGHT) += op6893-conn.o
 obj-$(CONFIG_ARM64_OP6893_FBKICK) += op6893-fbkick.o
 
 op6893-boot-dts := mt6893-op6893-boot.dts

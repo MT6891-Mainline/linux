@@ -4,6 +4,7 @@
  */
 
 #include <linux/delay.h>
+#include <linux/soc/mediatek/op6893-conn.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_reserved_mem.h>
@@ -917,6 +918,10 @@ int consys_hw_init(struct conninfra_dev_cb *dev_cb)
 				"continuing without WiFi firmware handshake\n",
 				retry);
 	}
+
+	/* Do not start radio clients before the OP6893 suppliers bind. */
+	if (op6893_conn_board() && (iRet || !atomic_read(&g_hw_init_done)))
+		return iRet ?: -ETIMEDOUT;
 
 	conninfra_get_phy_addr(&emi_addr, &emi_size);
 	connectivity_export_conap_scp_init(consys_hw_get_ic_info(CONNSYS_SOC_CHIPID), emi_addr);

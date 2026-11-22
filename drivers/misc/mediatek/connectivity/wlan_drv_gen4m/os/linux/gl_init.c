@@ -70,6 +70,8 @@
  *                    E X T E R N A L   R E F E R E N C E S
  *******************************************************************************
  */
+#include <linux/of_net.h>
+#include <linux/soc/mediatek/op6893-conn.h>
 #include "gl_os.h"
 #include "debug.h"
 #include "wlan_lib.h"
@@ -4705,6 +4707,18 @@ static int32_t wlanOnPreNetRegister(struct GLUE_INFO *prGlueInfo,
 		uint32_t u4SetInfoLen = 0;
 		struct net_device *prDevHandler;
 
+		if (op6893_conn_board()) {
+			struct device_node *np;
+			u8 mac[ETH_ALEN];
+
+			np = of_find_compatible_node(NULL, NULL, "mediatek,wifi");
+			if (np && !of_get_mac_address(np, mac)) {
+				ether_addr_copy(prAdapter->rWifiVar.aucPermanentAddress, mac);
+				ether_addr_copy(prAdapter->rWifiVar.aucMacAddress, mac);
+			}
+			of_node_put(np);
+		}
+
 		rStatus = kalIoctl(prGlueInfo, wlanoidQueryCurrentAddr,
 				   &MacAddr.sa_data, PARAM_MAC_ADDR_LEN, TRUE,
 				   TRUE, TRUE, &u4SetInfoLen);
@@ -6020,10 +6034,12 @@ static int initWlan(void)
 	 * here, don't fail the driver: register the AXI driver anyway and
 	 * defer the NVRAM load + power-on to a workqueue.
 	 */
-	ret = wlanLoadNvramFirmware(prGlueInfo->prDev);
-	if (ret)
-		pr_warn("CHOPIN-NVRAM: '%s' not available yet (%d), deferring\n",
-			CHOPIN_WIFI_NVRAM_FW, ret);
+	if (!op6893_conn_board()) {
+		ret = wlanLoadNvramFirmware(prGlueInfo->prDev);
+		if (ret)
+			pr_warn("CHOPIN-NVRAM: '%s' not available yet (%d), deferring\n",
+				CHOPIN_WIFI_NVRAM_FW, ret);
+	}
 
 	gPrDev = NULL;
 
@@ -6073,6 +6089,8 @@ static int initWlan(void)
 	 * this work even when the blob was already available at probe time.
 	 */
 	INIT_DELAYED_WORK(&wlan_nvram_defer_work, wlan_nvram_deferred_poweron);
+	if (op6893_conn_board())
+		return 0;
 
 	if (wlanNvramGetState() == NVRAM_STATE_READY) {
 		/* Blob was available at probe time: power on immediately. */

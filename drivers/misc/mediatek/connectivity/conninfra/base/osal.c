@@ -1708,7 +1708,7 @@ int osal_wake_lock_count(struct osal_wake_lock *pLock)
 	if (!pLock)
 		return -1;
 	if (pLock->init_flag == 1)
-		count = pLock->wake_lock->active;
+		count = pLock->wake_lock && pLock->wake_lock->active;
 	else
 		pr_info("%s: wake_lock is not initialized!\n", __func__);
 	return count;
