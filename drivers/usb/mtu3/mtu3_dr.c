@@ -133,6 +133,7 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 	struct mtu3 *mtu = ssusb->u3d;
 	enum usb_role desired_role = otg_sx->desired_role;
 	enum usb_role current_role;
+	bool detached = desired_role == USB_ROLE_NONE;
 	bool reset_on_host_entry = ssusb_host_follows_role(ssusb) &&
 				   of_machine_is_compatible("realme,op6893");
 	int ret;
@@ -147,7 +148,7 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 	}
 
 	if (current_role == desired_role)
-		return;
+		goto gadget_session;
 
 	dev_dbg(ssusb->dev, "set role : %s\n", usb_role_string(desired_role));
 	mtu3_dbg_trace(ssusb->dev, "set role : %s", usb_role_string(desired_role));
@@ -197,6 +198,18 @@ restore_device:
 		dev_err(ssusb->dev, "invalid role\n");
 	}
 	pm_runtime_put(ssusb->dev);
+
+gadget_session:
+	/*
+	 * On OP6893 the forced MAC VBUS indication hides a cable detach
+	 * from the gadget. In the Type-C profile, use the role switch to
+	 * close the gadget session even if the hardware stays in device mode.
+	 */
+	if (reset_on_host_entry && desired_role == USB_ROLE_DEVICE) {
+		if (detached)
+			usb_gadget_set_state(&mtu->g, USB_STATE_NOTATTACHED);
+		usb_udc_vbus_handler(&mtu->g, !detached);
+	}
 }
 
 static void ssusb_set_mode(struct otg_switch_mtk *otg_sx, enum usb_role role)
