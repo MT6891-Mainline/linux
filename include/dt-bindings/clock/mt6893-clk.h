@@ -3,10 +3,14 @@
 #define _DT_BINDINGS_CLK_MT6893_H
 
 #define CLK_APMIXED_MAINPLL	6
+#define CLK_APMIXED_UNIVPLL	7
 #define CLK_APMIXED_MFGPLL	11
 
 /* Diagnostic clock subset; retain the MT6893 vendor clock indices. */
 #define CLK_TOP_MAINPLL_D5_D2	15
+#define CLK_TOP_UNIVPLL_D5_D2	35
+#define CLK_TOP_UNIVPLL_D5_D4	36
+#define CLK_TOP_UNIVPLL_D6_D4	41
 #define CLK_TOP_OSC_D4		109
 #define CLK_TOP_OSC_D8		110
 #define CLK_TOP_OSC_D16		111
@@ -17,6 +21,8 @@
 #define CLK_TOP_FPWRAP_ULPOSC	150
 #define CLK_TOP_MFG_SEL		210
 #define CLK_TOP_PWRAP_ULPOSC_SEL	222
+#define CLK_TOP_USB_TOP_SEL	228
+#define CLK_TOP_SSUSB_XHCI_SEL	229
 
 #define CLK_IFRAO_PMIC_TMR	0
 #define CLK_IFRAO_PMIC_AP		1
@@ -31,6 +37,7 @@
 #define CLK_IFRAO_DPMAIF	39
 #define CLK_IFRAO_DPMAIF_MAIN	74
 
+#define CLK_INFRA_AO_SSUSB	37
 #define CLK_INFRA_AO_SSUSB_XHCI	59
 
 #endif
