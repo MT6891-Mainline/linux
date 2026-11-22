@@ -4,12 +4,14 @@
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/hwmon.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
+#include <linux/unaligned.h>
 #include <linux/workqueue.h>
 
 #define MP2650_OTG_VOLTAGE		0x06
@@ -24,6 +26,11 @@
 #define MP2650_RESET_MASK		GENMASK(7, 6)
 #define MP2650_WATCHDOG			0x09
 #define MP2650_WATCHDOG_MASK		GENMASK(5, 4)
+#define MP2650_VIN_ADC			0x1c
+#define MP2650_IIN_ADC			0x1e
+#define MP2650_INPUT_ADC_SHIFT		6
+#define MP2650_VIN_ADC_MV		25
+#define MP2650_IIN_ADC_UA		6250
 #define MP2650_BURST_CONTROL		0x3e
 #define MP2650_BOOST_CONTROL		0x3f
 #define MP2650_KEY			0x53
@@ -233,6 +240,62 @@ static const struct regmap_config mp2650_regmap = {
 	.max_register = MP2650_KEY,
 };
 
+static int mp2650_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
+			     u32 attr, int channel, long *val)
+{
+	struct mp2650_otg *otg = dev_get_drvdata(dev);
+	unsigned int sample;
+	u8 buf[2];
+	int ret;
+
+	if (type != hwmon_in && type != hwmon_curr)
+		return -EOPNOTSUPP;
+
+	guard(mutex)(&otg->lock);
+	/* The same ADCs can see the locally driven VBUS during boost. */
+	if (otg->needs_restore)
+		return -ENODATA;
+
+	ret = regmap_bulk_read(otg->map,
+			       type == hwmon_in ? MP2650_VIN_ADC : MP2650_IIN_ADC,
+			       buf, sizeof(buf));
+	if (ret)
+		return ret;
+
+	sample = get_unaligned_le16(buf) >> MP2650_INPUT_ADC_SHIFT;
+	if (type == hwmon_in)
+		*val = sample * MP2650_VIN_ADC_MV;
+	else
+		*val = DIV_ROUND_CLOSEST(sample * MP2650_IIN_ADC_UA, 1000);
+
+	return 0;
+}
+
+static int mp2650_hwmon_read_string(struct device *dev,
+				    enum hwmon_sensor_types type, u32 attr,
+				    int channel, const char **str)
+{
+	*str = "USB input";
+	return 0;
+}
+
+static const struct hwmon_ops mp2650_hwmon_ops = {
+	.visible = 0444,
+	.read = mp2650_hwmon_read,
+	.read_string = mp2650_hwmon_read_string,
+};
+
+static const struct hwmon_channel_info * const mp2650_hwmon_info[] = {
+	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT | HWMON_I_LABEL),
+	HWMON_CHANNEL_INFO(curr, HWMON_C_INPUT | HWMON_C_LABEL),
+	NULL
+};
+
+static const struct hwmon_chip_info mp2650_hwmon_chip = {
+	.ops = &mp2650_hwmon_ops,
+	.info = mp2650_hwmon_info,
+};
+
 static int mp2650_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -279,6 +342,15 @@ static int mp2650_probe(struct i2c_client *client)
 	rdev = devm_regulator_register(dev, &mp2650_desc, &config);
 	if (IS_ERR(rdev))
 		return PTR_ERR(rdev);
+
+	if (IS_REACHABLE(CONFIG_HWMON)) {
+		struct device *hwmon;
+
+		hwmon = devm_hwmon_device_register_with_info(dev, "mp2650", otg,
+							    &mp2650_hwmon_chip, NULL);
+		if (IS_ERR(hwmon))
+			dev_warn(dev, "Could not register input monitor: %pe\n", hwmon);
+	}
 
 	return devm_add_action_or_reset(dev, mp2650_cancel_work, otg);
 }
