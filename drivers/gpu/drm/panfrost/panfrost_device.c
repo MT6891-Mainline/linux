@@ -140,15 +140,17 @@ static int panfrost_clk_init(struct panfrost_device *pfdev)
 	if (err)
 		return err;
 
-	chopin_core_pll = devm_clk_get_optional(pfdev->base.dev, "core_pll");
-	if (IS_ERR(chopin_core_pll))
-		chopin_core_pll = NULL;
-	chopin_core_slow = devm_clk_get_optional(pfdev->base.dev, "core_slow");
-	if (IS_ERR(chopin_core_slow))
-		chopin_core_slow = NULL;
-	chopin_pfdev = pfdev;
-	if (device_create_file(pfdev->base.dev, &dev_attr_core_clk_rate))
-		dev_warn(pfdev->base.dev, "chopin: no core_clk_rate knob\n");
+	if (pfdev->comp->chopin_power) {
+		chopin_core_pll = devm_clk_get_optional(pfdev->base.dev, "core_pll");
+		if (IS_ERR(chopin_core_pll))
+			chopin_core_pll = NULL;
+		chopin_core_slow = devm_clk_get_optional(pfdev->base.dev, "core_slow");
+		if (IS_ERR(chopin_core_slow))
+			chopin_core_slow = NULL;
+		chopin_pfdev = pfdev;
+		if (device_create_file(pfdev->base.dev, &dev_attr_core_clk_rate))
+			dev_warn(pfdev->base.dev, "chopin: no core_clk_rate knob\n");
+	}
 
 	pfdev->bus_clock = devm_clk_get_optional(pfdev->base.dev, "bus");
 	if (IS_ERR(pfdev->bus_clock)) {
@@ -430,8 +432,10 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 {
 	int err;
 
-	chopin_gpu_rails_on(pfdev->base.dev);
-	chopin_mtcmos_on(pfdev);
+	if (pfdev->comp->chopin_power) {
+		chopin_gpu_rails_on(pfdev->base.dev);
+		chopin_mtcmos_on(pfdev);
+	}
 
 	mutex_init(&pfdev->sched_lock);
 	INIT_LIST_HEAD(&pfdev->as_lru_list);
@@ -473,7 +477,8 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 		goto out_reset;
 	}
 
-	chopin_mfg_axi_config(pfdev->base.dev);
+	if (pfdev->comp->chopin_power)
+		chopin_mfg_axi_config(pfdev->base.dev);
 
 	err = panfrost_devfreq_init(pfdev);
 	if (err) {
@@ -509,7 +514,8 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 	 * and job manager are initialised, so the very first userspace job
 	 * already runs in the recovered state.
 	 */
-	panfrost_device_reset(pfdev, true);
+	if (pfdev->comp->needs_jm_reset)
+		panfrost_device_reset(pfdev, true);
 
 	err = panfrost_perfcnt_init(pfdev);
 	if (err)
