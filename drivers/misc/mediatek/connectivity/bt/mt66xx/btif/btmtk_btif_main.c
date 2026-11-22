@@ -1549,7 +1549,8 @@ static int btmtk_cif_probe(struct platform_device *pdev)
 	btmtk_allocate_hci_device(g_sbdev, HCI_UART);
 #if (USE_DEVICE_NODE == 0)
 	SET_HCIDEV_DEV(g_sbdev->hdev, BTMTK_GET_DEV(cif_dev));
-	btmtk_register_hci_device(g_sbdev);
+	if (!of_machine_is_compatible("realme,op6893"))
+		btmtk_register_hci_device(g_sbdev);
 #endif
 
 	/* 3. Init power manager */
@@ -1604,6 +1605,12 @@ static int btmtk_cif_probe(struct platform_device *pdev)
 
 	/* Set ICB cif state */
 	btmtk_set_chip_state((void *)g_sbdev, BTMTK_STATE_WORKING);
+
+#if (USE_DEVICE_NODE == 0)
+	/* HCI setup may run immediately, so publish after BTIF is ready. */
+	if (of_machine_is_compatible("realme,op6893"))
+		btmtk_register_hci_device(g_sbdev);
+#endif
 
 	BTMTK_INFO("%s: Done", __func__);
 	return 0;

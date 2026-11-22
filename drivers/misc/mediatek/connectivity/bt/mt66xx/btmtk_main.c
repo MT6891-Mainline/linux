@@ -3,6 +3,8 @@
  * Copyright (c) 2019 MediaTek Inc.
  */
 
+#include <linux/etherdevice.h>
+#include <linux/nvmem-consumer.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -3467,10 +3469,11 @@ static int bt_open(struct hci_dev *hdev)
 	/* Program the nvdata BD address into the controller before HCI init
 	 * reads it back, so BlueZ sees the real address without a restart.
 	 */
-	if (is_mt66xx(bdev->chip_id))
-		btmtk_set_bdaddr_vendor(bdev);
-
-	bt_schedule_bdaddr_reapply();
+	if (!of_machine_is_compatible("realme,op6893")) {
+		if (is_mt66xx(bdev->chip_id))
+			btmtk_set_bdaddr_vendor(bdev);
+		bt_schedule_bdaddr_reapply();
+	}
 
 	if (bdev->bt_cfg.support_bt_single_sku) {
 		// todo: need to unmask, kernel-5.10 not export, submit request to google
@@ -3507,12 +3510,69 @@ static int btmtk_set_bdaddr_vendor(struct btmtk_dev *bdev);
 static int btmtk_load_bdaddr(struct btmtk_dev *bdev);
 static void bt_schedule_bdaddr_reapply(void);
 
+/* OP6893 stores the factory public address in network byte order. */
+static int btmtk_op6893_read_address(struct hci_dev *hdev)
+{
+	struct device_node *np;
+	struct nvmem_cell *cell;
+	u8 *addr;
+	size_t len;
+
+	np = of_find_compatible_node(NULL, NULL, "mediatek,bt");
+	if (!np)
+		return -ENODEV;
+
+	cell = of_nvmem_cell_get(np, "bd-address");
+	of_node_put(np);
+	if (IS_ERR(cell))
+		return PTR_ERR(cell);
+
+	addr = nvmem_cell_read(cell, &len);
+	nvmem_cell_put(cell);
+	if (IS_ERR(addr))
+		return PTR_ERR(addr);
+
+	if (len != ETH_ALEN || !is_valid_ether_addr(addr)) {
+		kfree(addr);
+		return -EINVAL;
+	}
+
+	baswap(&hdev->public_addr, (bdaddr_t *)addr);
+	kfree(addr);
+	return 0;
+}
+
+static int btmtk_op6893_set_address(struct hci_dev *hdev,
+				   const bdaddr_t *address)
+{
+	struct sk_buff *skb;
+
+	skb = __hci_cmd_sync(hdev, 0xfc1a, sizeof(*address), address,
+			     HCI_INIT_TIMEOUT);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
+
+	kfree_skb(skb);
+	return 0;
+}
+
 static int bt_setup(struct hci_dev *hdev)
 {
 	int ret = 0;
 	struct btmtk_dev *bdev = hci_get_drvdata(hdev);
 
 	BTMTK_INFO("%s", __func__);
+
+	if (of_machine_is_compatible("realme,op6893")) {
+		if (!btmtk_op6893_read_address(hdev))
+			hci_set_quirk(hdev, HCI_QUIRK_INVALID_BDADDR);
+
+		if (is_mt66xx(bdev->chip_id) &&
+		    btmtk_fops_get_state(bdev) != BTMTK_FOPS_STATE_OPENED)
+			return main_info.hif_hook.open(hdev);
+
+		return 0;
+	}
 
 	if (is_mt66xx(bdev->chip_id)) {
 		ret = main_info.hif_hook.open(hdev);
@@ -3761,6 +3821,10 @@ int btmtk_allocate_hci_device(struct btmtk_dev *bdev, int hci_bus_type)
 	hdev->flush    = bt_flush;
 	hdev->send	   = bt_send_frame;
 	hdev->setup    = bt_setup;
+	if (of_machine_is_compatible("realme,op6893")) {
+		hdev->set_bdaddr = btmtk_op6893_set_address;
+		hci_set_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
+	}
 
 	init_waitqueue_head(&bdev->p_wait_event_q);
 
@@ -3801,6 +3865,13 @@ int btmtk_register_hci_device(struct btmtk_dev *bdev)
 	if (err < 0) {
 		BTMTK_INFO("%s can't register", __func__);
 		goto exit;
+	}
+
+	/* Let the core finish setup and learn the controller capabilities. */
+	if (of_machine_is_compatible("realme,op6893")) {
+		hci_dev_clear_flag(hdev, HCI_AUTO_OFF);
+		cancel_delayed_work(&hdev->power_off);
+		return 0;
 	}
 
 #if CFG_SUPPORT_BLUEZ
@@ -4306,7 +4377,8 @@ int __init main_driver_init(void)
 		return ret;
 	}
 
-	btmtk_schedule_bdaddr_load();
+	if (!of_machine_is_compatible("realme,op6893"))
+		btmtk_schedule_bdaddr_load();
 
 	ret = btmtk_schedule_fwlog_init();
 	if (ret < 0) {
