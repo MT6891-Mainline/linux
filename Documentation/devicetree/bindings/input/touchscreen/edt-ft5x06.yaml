@@ -50,6 +50,9 @@ properties:
       - items:
           - const: focaltech,ft3519
           - const: focaltech,ft3518
+      - items:
+          - const: oneplus,op6893-21651-ft3518
+          - const: focaltech,ft3518
 
   reg:
     maxItems: 1
