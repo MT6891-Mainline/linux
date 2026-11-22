@@ -6,9 +6,11 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
+#include <linux/workqueue.h>
 
 #define MP2650_OTG_VOLTAGE		0x06
 #define MP2650_OTG_VOLTAGE_MASK		GENMASK(6, 0)
@@ -27,7 +29,15 @@
 #define MP2650_KEY			0x53
 #define MP2650_UNLOCK			0x95
 
+/* Keep the bring-up guard opt-in and independent of the TCPC bus. */
+static unsigned int test_timeout_s;
+module_param(test_timeout_s, uint, 0600);
+MODULE_PARM_DESC(test_timeout_s, "Limit experimental OTG supply duration (0 disables)");
+
 struct mp2650_otg {
+	struct device *dev;
+	struct delayed_work cutoff;
+	struct mutex lock;
 	struct regmap *map;
 	struct gpio_desc *enable;
 	struct gpio_desc *input_isolate;
@@ -69,9 +79,8 @@ static int mp2650_stop(struct mp2650_otg *otg)
 	return ret;
 }
 
-static int mp2650_enable(struct regulator_dev *rdev)
+static int mp2650_start(struct mp2650_otg *otg)
 {
-	struct mp2650_otg *otg = rdev_get_drvdata(rdev);
 	struct regmap *map = otg->map;
 	int ret, cleanup, lock_ret;
 	unsigned int val;
@@ -140,14 +149,55 @@ static int mp2650_enable(struct regulator_dev *rdev)
 stop:
 	cleanup = mp2650_stop(otg);
 	if (cleanup)
-		dev_err(rdev_get_dev(rdev), "Could not roll back OTG: %d\n", cleanup);
+		dev_err(otg->dev, "Could not roll back OTG: %d\n", cleanup);
 
+	return ret;
+}
+
+static void mp2650_cutoff_work(struct work_struct *work)
+{
+	struct mp2650_otg *otg = container_of(to_delayed_work(work), struct mp2650_otg, cutoff);
+	int ret;
+
+	mutex_lock(&otg->lock);
+	if (otg->needs_restore) {
+		ret = mp2650_stop(otg);
+		dev_warn(otg->dev, "OTG test cutoff: %d\n", ret);
+	}
+	mutex_unlock(&otg->lock);
+}
+
+static void mp2650_cancel_work(void *data)
+{
+	struct mp2650_otg *otg = data;
+
+	cancel_delayed_work_sync(&otg->cutoff);
+}
+
+static int mp2650_enable(struct regulator_dev *rdev)
+{
+	struct mp2650_otg *otg = rdev_get_drvdata(rdev);
+	unsigned int limit = min(READ_ONCE(test_timeout_s), 60U);
+	int ret;
+
+	mutex_lock(&otg->lock);
+	ret = mp2650_start(otg);
+	if (!ret && limit)
+		schedule_delayed_work(&otg->cutoff, msecs_to_jiffies(limit * 1000));
+	mutex_unlock(&otg->lock);
 	return ret;
 }
 
 static int mp2650_disable(struct regulator_dev *rdev)
 {
-	return mp2650_stop(rdev_get_drvdata(rdev));
+	struct mp2650_otg *otg = rdev_get_drvdata(rdev);
+	int ret;
+
+	cancel_delayed_work_sync(&otg->cutoff);
+	mutex_lock(&otg->lock);
+	ret = mp2650_stop(otg);
+	mutex_unlock(&otg->lock);
+	return ret;
 }
 
 static int mp2650_is_enabled(struct regulator_dev *rdev)
@@ -222,8 +272,15 @@ static int mp2650_probe(struct i2c_client *client)
 	if (!config.init_data)
 		return -EINVAL;
 
+	otg->dev = dev;
+	mutex_init(&otg->lock);
+	INIT_DELAYED_WORK(&otg->cutoff, mp2650_cutoff_work);
+
 	rdev = devm_regulator_register(dev, &mp2650_desc, &config);
-	return PTR_ERR_OR_ZERO(rdev);
+	if (IS_ERR(rdev))
+		return PTR_ERR(rdev);
+
+	return devm_add_action_or_reset(dev, mp2650_cancel_work, otg);
 }
 
 static const struct of_device_id mp2650_of_match[] = {
