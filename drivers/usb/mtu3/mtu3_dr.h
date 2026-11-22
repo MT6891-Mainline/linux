@@ -12,7 +12,16 @@
 
 #if IS_ENABLED(CONFIG_USB_MTU3_HOST) || IS_ENABLED(CONFIG_USB_MTU3_DUAL_ROLE)
 
-int ssusb_host_init(struct ssusb_mtk *ssusb, struct device_node *parent_dn);
+/* The 21651 diagnostic profile owns the xHCI child only in host role. */
+static inline bool ssusb_host_follows_role(struct ssusb_mtk *ssusb)
+{
+	return IS_ENABLED(CONFIG_ARM64_OP6893_21651_USB_DRD) &&
+	       ssusb->dr_mode == USB_DR_MODE_OTG;
+}
+
+int ssusb_host_populate(struct ssusb_mtk *ssusb);
+void ssusb_host_depopulate(struct ssusb_mtk *ssusb);
+int ssusb_host_init(struct ssusb_mtk *ssusb);
 void ssusb_host_exit(struct ssusb_mtk *ssusb);
 int ssusb_wakeup_of_property_parse(struct ssusb_mtk *ssusb,
 				struct device_node *dn);
@@ -22,9 +31,7 @@ void ssusb_wakeup_set(struct ssusb_mtk *ssusb, bool enable);
 
 #else
 
-static inline int ssusb_host_init(struct ssusb_mtk *ssusb,
-
-	struct device_node *parent_dn)
+static inline int ssusb_host_init(struct ssusb_mtk *ssusb)
 {
 	return 0;
 }

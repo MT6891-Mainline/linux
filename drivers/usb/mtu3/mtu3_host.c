@@ -367,27 +367,36 @@ static void ssusb_host_cleanup(struct ssusb_mtk *ssusb)
  * Because the host driver will keep link with devices attached when system
  * enters suspend mode, so no need to control VBUSes after initialization.
  */
-int ssusb_host_init(struct ssusb_mtk *ssusb, struct device_node *parent_dn)
+int ssusb_host_populate(struct ssusb_mtk *ssusb)
 {
-	struct device *parent_dev = ssusb->dev;
+	struct device *dev = ssusb->dev;
 	int ret;
 
-	ssusb_host_setup(ssusb);
-
-	ret = of_platform_populate(parent_dn, NULL, NULL, parent_dev);
+	ret = of_platform_populate(dev->of_node, NULL, NULL, dev);
 	if (ret) {
-		dev_dbg(parent_dev, "failed to create child devices at %pOF\n",
-				parent_dn);
-		return ret;
+		ssusb_host_depopulate(ssusb);
+		return dev_err_probe(dev, ret, "failed to create xHCI child\n");
 	}
-
-	dev_info(parent_dev, "xHCI platform device register success...\n");
 
 	return 0;
 }
 
-void ssusb_host_exit(struct ssusb_mtk *ssusb)
+void ssusb_host_depopulate(struct ssusb_mtk *ssusb)
 {
 	of_platform_depopulate(ssusb->dev);
+}
+
+int ssusb_host_init(struct ssusb_mtk *ssusb)
+{
+	ssusb_host_setup(ssusb);
+	if (ssusb_host_follows_role(ssusb))
+		return 0;
+
+	return ssusb_host_populate(ssusb);
+}
+
+void ssusb_host_exit(struct ssusb_mtk *ssusb)
+{
+	ssusb_host_depopulate(ssusb);
 	ssusb_host_cleanup(ssusb);
 }

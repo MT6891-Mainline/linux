@@ -336,7 +336,6 @@ out:
 
 static int mtu3_probe(struct platform_device *pdev)
 {
-	struct device_node *node = pdev->dev.of_node;
 	struct device *dev = &pdev->dev;
 	struct ssusb_mtk *ssusb;
 	int ret = -ENOMEM;
@@ -409,7 +408,7 @@ static int mtu3_probe(struct platform_device *pdev)
 		}
 		break;
 	case USB_DR_MODE_HOST:
-		ret = ssusb_host_init(ssusb, node);
+		ret = ssusb_host_init(ssusb);
 		if (ret) {
 			dev_err(dev, "failed to initialize host\n");
 			goto comm_exit;
@@ -422,7 +421,7 @@ static int mtu3_probe(struct platform_device *pdev)
 			goto comm_exit;
 		}
 
-		ret = ssusb_host_init(ssusb, node);
+		ret = ssusb_host_init(ssusb);
 		if (ret) {
 			dev_err(dev, "failed to initialize host\n");
 			goto gadget_exit;
@@ -572,8 +571,6 @@ static int mtu3_suspend_common(struct device *dev, pm_message_t msg)
 		ssusb_wakeup_set(ssusb, true);
 	return 0;
 
-sleep_err:
-	resume_ip_and_ports(ssusb, msg);
 err:
 	return ret;
 }

@@ -133,6 +133,7 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 	struct mtu3 *mtu = ssusb->u3d;
 	enum usb_role desired_role = otg_sx->desired_role;
 	enum usb_role current_role;
+	int ret;
 
 	current_role = ssusb->is_host ? USB_ROLE_HOST : USB_ROLE_DEVICE;
 
@@ -148,7 +149,9 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 
 	dev_dbg(ssusb->dev, "set role : %s\n", usb_role_string(desired_role));
 	mtu3_dbg_trace(ssusb->dev, "set role : %s", usb_role_string(desired_role));
-	pm_runtime_get_sync(ssusb->dev);
+	ret = pm_runtime_resume_and_get(ssusb->dev);
+	if (ret < 0)
+		return;
 
 	switch (desired_role) {
 	case USB_ROLE_HOST:
@@ -156,9 +159,16 @@ static void ssusb_mode_sw_work(struct work_struct *work)
 		mtu3_stop(mtu);
 		switch_port_to_host(ssusb);
 		ssusb_set_vbus(otg_sx, 1);
-		ssusb->is_host = true;
-		break;
+		if (!ssusb_host_follows_role(ssusb) || !ssusb_host_populate(ssusb)) {
+			ssusb->is_host = true;
+			break;
+		}
+
+		/* Child creation failed; restore the gadget. */
+		fallthrough;
 	case USB_ROLE_DEVICE:
+		if (ssusb_host_follows_role(ssusb))
+			ssusb_host_depopulate(ssusb);
 		ssusb_set_force_mode(ssusb, MTU3_DR_FORCE_DEVICE);
 		ssusb->is_host = false;
 		ssusb_set_vbus(otg_sx, 0);
