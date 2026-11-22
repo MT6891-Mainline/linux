@@ -1160,7 +1160,9 @@ static void vbus_event_work(struct work_struct *work)
 	struct usb_udc *udc = container_of(work, struct usb_udc, vbus_work);
 
 	mutex_lock(&udc->connect_lock);
-	usb_udc_connect_control_locked(udc);
+	/* Binding already applies the last VBUS status once the UDC starts. */
+	if (udc->started)
+		usb_udc_connect_control_locked(udc);
 	mutex_unlock(&udc->connect_lock);
 }
 
