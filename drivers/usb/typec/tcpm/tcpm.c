@@ -5698,8 +5698,15 @@ static void run_state_machine(struct tcpm_port *port)
 			break;
 		}
 		tcpm_set_cc(port, TYPEC_CC_RD);
-		if (port->port_type == TYPEC_PORT_DRP)
+		if (port->port_type == TYPEC_PORT_DRP) {
 			tcpm_set_state(port, SRC_UNATTACHED, PD_T_DRP_SRC);
+		} else {
+			/*
+			 * If CC was already asserted before the port reset,
+			 * returning to Rd may not generate another alert.
+			 */
+			tcpm_cc_change(port);
+		}
 		break;
 	case SNK_ATTACH_WAIT:
 		if (tcpm_port_is_debug_sink(port))
