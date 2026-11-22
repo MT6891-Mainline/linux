@@ -32,6 +32,33 @@
 			opp-microvolt = <600000>;
 		};
 	};
+
+	i2c-battery {
+		compatible = "i2c-gpio";
+		sda-gpios = <&pio 125 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&pio 124 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		i2c-gpio,delay-us = <5>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&battery_i2c_pins>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		fuel-gauge@55 {
+			compatible = "ti,bq28z610";
+			reg = <0x55>;
+		};
+	};
+};
+
+&pio {
+	battery_i2c_pins: battery-i2c-pins {
+		pins {
+			pinmux = <PINMUX_GPIO124__FUNC_GPIO124>,
+				 <PINMUX_GPIO125__FUNC_GPIO125>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
 };
 
 &gpu {
