@@ -111,6 +111,10 @@ ifeq ($(CONFIG_ARM64_OP6893_21651_TYPEC_SINK),y)
 op6893-boot-dts := mt6893-op6893-21651-typec-sink.dts
 endif
 
+ifeq ($(CONFIG_ARM64_OP6893_21651_USB_DRD),y)
+op6893-boot-dts := mt6893-op6893-21651-usb-drd.dts
+endif
+
 ifeq ($(CONFIG_ARM64_OP6893_21651_MODEM),y)
 op6893-boot-dts := mt6893-op6893-21651-modem.dts
 endif

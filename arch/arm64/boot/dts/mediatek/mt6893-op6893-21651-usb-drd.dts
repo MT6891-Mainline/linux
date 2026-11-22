@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "mt6893-op6893-21651-typec-sink.dts"
+
+&usb0 {
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+	#address-cells = <2>;
+	#size-cells = <2>;
+	ranges;
+
+	usb@11200000 {
+		compatible = "mediatek,mtk-xhci";
+		reg = <0 0x11200000 0 0x1000>;
+		reg-names = "mac";
+		interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&ufs_infracfg CLK_INFRA_AO_SSUSB_XHCI>;
+		clock-names = "sys_ck";
+		vusb33-supply = <&vusb33_boot>;
+	};
+
+	port {
+		usb_hs_ep: endpoint {
+			remote-endpoint = <&usb_c_hs_ep>;
+		};
+	};
+};
+
+&{/soc/i2c@11f00000/pmic@34/tcpc/connector} {
+	port {
+		usb_c_hs_ep: endpoint {
+			remote-endpoint = <&usb_hs_ep>;
+		};
+	};
+};

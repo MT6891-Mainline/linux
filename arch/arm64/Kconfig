@@ -2623,6 +2623,16 @@ config ARM64_OP6893_21651_TYPEC_SINK
 	  The MTU3 controller stays in peripheral mode, preserving
 	  the serial and Ethernet gadget functions used for bring-up.
 
+config ARM64_OP6893_21651_USB_DRD
+	bool "Use the OP6893 21651 USB dual-role test device tree"
+	depends on ARM64_OP6893_21651_TYPEC_SINK && USB_MTU3_DUAL_ROLE
+	depends on USB_XHCI_MTK
+	help
+	  Register the xHCI controller and the USB data role switch.
+	  The Type-C port remains a fixed sink with PD disabled, so
+	  this profile can exercise the controller without enabling
+	  the board's USB VBUS source.
+
 config ARM64_OP6893_CONN_PREFLIGHT
 	bool "Experimental op6893 connectivity preflight and rail cycle"
 	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL

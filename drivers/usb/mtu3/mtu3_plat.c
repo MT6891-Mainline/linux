@@ -289,10 +289,18 @@ static int get_ssusb_rscs(struct platform_device *pdev, struct ssusb_mtk *ssusb)
 	of_property_read_u32(node, "mediatek,u2p-dis-msk",
 			     &ssusb->u2p_dis_msk);
 
-	otg_sx->vbus = devm_regulator_get(dev, "vbus");
-	if (IS_ERR(otg_sx->vbus)) {
-		dev_err(dev, "failed to get vbus\n");
-		return PTR_ERR(otg_sx->vbus);
+	/*
+	 * With a connector role switch, VBUS can be owned by the
+	 * connector driver. Keep using a local regulator on legacy boards
+	 * that describe one.
+	 */
+	if (ssusb->dr_mode != USB_DR_MODE_OTG ||
+	    !of_property_read_bool(node, "usb-role-switch") ||
+	    of_property_present(node, "vbus-supply")) {
+		otg_sx->vbus = devm_regulator_get(dev, "vbus");
+		if (IS_ERR(otg_sx->vbus))
+			return dev_err_probe(dev, PTR_ERR(otg_sx->vbus),
+					     "failed to get vbus\n");
 	}
 
 	if (ssusb->dr_mode == USB_DR_MODE_HOST)
