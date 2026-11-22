@@ -74,3 +74,4 @@ obj-$(CONFIG_INTEL_SSEI)	+= issei/
 obj-$(CONFIG_MTK_LOGSTORE_CONSOLE)	+= mtk-logstore-console.o
 obj-$(CONFIG_MTK_CMDQ_MBOX_EXT) += mediatek/
 obj-$(CONFIG_MTK_COMBO) += mediatek/
+obj-$(CONFIG_ARM64_OP6893_BRINGUP) += mediatek/ccci/
