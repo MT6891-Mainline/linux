@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "mt6893-op6893-21651-boot.dts"
+
+&{/soc/i2c@11f00000/pmic@34} {
+	tcpc {
+		compatible = "mediatek,mt6360-tcpc";
+		interrupts-extended = <&pio 25 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "PD_IRQB";
+
+		connector {
+			compatible = "usb-c-connector";
+			data-role = "device";
+			power-role = "sink";
+			pd-disable;
+			typec-power-opmode = "default";
+		};
+	};
+};

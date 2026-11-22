@@ -210,7 +210,8 @@ static int mt6360_tcpc_probe(struct platform_device *pdev)
 	{
 		u16 mask = TCPC_ALERT_TX_SUCCESS | TCPC_ALERT_TX_FAILED |
 			   TCPC_ALERT_TX_DISCARDED | TCPC_ALERT_RX_STATUS |
-			   TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS;
+			   TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS |
+			   TCPC_ALERT_POWER_STATUS;
 
 		ret = mti->tdata.regmap ? mt6360_tcpc_write16(mti->tdata.regmap,
 							TCPC_ALERT_MASK, mask) : -ENODEV;

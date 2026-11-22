@@ -2613,6 +2613,16 @@ config ARM64_OP6893_21651
 	bool "Use the OP6893 21651 board device tree"
 	depends on ARM64_OP6893_BRINGUP
 
+config ARM64_OP6893_21651_TYPEC_SINK
+	bool "Use the OP6893 21651 Type-C sink test device tree"
+	depends on ARM64_OP6893_21651 && !ARM64_OP6893_21651_MODEM
+	depends on TYPEC_MT6360
+	help
+	  Enable Type-C attach and orientation reporting for the USB
+	  peripheral port, without USB Power Delivery or VBUS sourcing.
+	  The MTU3 controller stays in peripheral mode, preserving
+	  the serial and Ethernet gadget functions used for bring-up.
+
 config ARM64_OP6893_CONN_PREFLIGHT
 	bool "Experimental op6893 connectivity preflight and rail cycle"
 	depends on ARM64_OP6893_BRINGUP && REGULATOR_MT6359 && PINCTRL
