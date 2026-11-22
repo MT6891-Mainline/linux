@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/regulator/oplus,21651-mp2650-otg.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: OP6893 21651 MP2650 USB VBUS supply
+
+maintainers:
+  - hzyry2046 <hzyry2046@163.com>
+
+description:
+  The MP2650 charger on the OP6893 21651 can supply USB VBUS at 5 V.
+  This binding describes that board's boost output and charging input
+  isolation wiring. It does not describe the charging function.
+
+allOf:
+  - $ref: regulator.yaml#
+
+properties:
+  compatible:
+    const: oplus,21651-mp2650-otg
+
+  reg:
+    maxItems: 1
+
+  otg-enable-gpios:
+    description: Board signal enabling the VBUS output path.
+    maxItems: 1
+
+  input-isolate-gpios:
+    description: Board signal isolating the input charging path.
+    maxItems: 1
+
+  regulator-min-microvolt:
+    const: 5000000
+
+  regulator-max-microvolt:
+    const: 5000000
+
+required:
+  - compatible
+  - reg
+  - otg-enable-gpios
+  - input-isolate-gpios
+  - regulator-name
+  - regulator-min-microvolt
+  - regulator-max-microvolt
+
+unevaluatedProperties: false
