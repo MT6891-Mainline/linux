@@ -12,11 +12,13 @@
 #include <linux/interrupt.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
 #include <linux/thermal.h>
+#include <linux/unaligned.h>
 #include <dt-bindings/thermal/mediatek,lvts-thermal.h>
 
 #include "../thermal_hwmon.h"
@@ -57,6 +59,7 @@
 #define LVTS_IMMD1(__base)		(__base + 0x00A4)
 #define LVTS_IMMD2(__base)		(__base + 0x00A8)
 #define LVTS_IMMD3(__base)		(__base + 0x00AC)
+#define LVTS_RDATA0(__base)		(__base + 0x00B0)
 #define LVTS_PROTCTL(__base)	(__base + 0x00C0)
 #define LVTS_PROTTA(__base)		(__base + 0x00C4)
 #define LVTS_PROTTB(__base)		(__base + 0x00C8)
@@ -68,8 +71,21 @@
 #define LVTS_FILTER_INTERVAL		0
 #define LVTS_SENSOR_INTERVAL		0
 #define LVTS_HW_FILTER				0x0
+#define LVTS_PERIOD_UNIT_MT6893		0x00C
+#define LVTS_GROUP_INTERVAL_MT6893	0x001
+#define LVTS_FILTER_INTERVAL_MT6893	0x001
+#define LVTS_SENSOR_INTERVAL_MT6893	0x001
+#define LVTS_HW_FILTER_MT6893		0x2
 #define LVTS_TSSEL_CONF				0x13121110
 #define LVTS_CALSCALE_CONF			0x300
+
+#define LVTS_CONFIG_DEVICE_ACCESS_START		BIT(24)
+#define LVTS_CONFIG_DEVICE_SENSING_STATUS	BIT(25)
+#define LVTS_MSRCTL1_BUSY_MASK			(BIT(10) | BIT(7) | BIT(0))
+#define LVTS_DEVICE_WRITE_MT6893		0x81030000
+#define LVTS_DEVICE_READ_MT6893			0x81020000
+#define LVTS_DEFAULT_COUNT_RC_MT6893		2750
+#define LVTS_RCK_DELTA_THRESHOLD		1061
 
 #define LVTS_MONINT_OFFSET_HIGH_INTEN_SENSOR0		BIT(3)
 #define LVTS_MONINT_OFFSET_HIGH_INTEN_SENSOR1		BIT(8)
@@ -88,6 +104,8 @@
 #define LVTS_SENSOR_MAX				4
 #define LVTS_GOLDEN_TEMP_MAX		62
 #define LVTS_GOLDEN_TEMP_DEFAULT	50
+#define LVTS_COEFF_A_MT6893			-252500
+#define LVTS_COEFF_B_MT6893			252500
 #define LVTS_COEFF_A_MT8195			-250460
 #define LVTS_COEFF_B_MT8195			250460
 #define LVTS_COEFF_A_MT7987			-204650
@@ -100,6 +118,7 @@
 #define LVTS_MSR_OFFSET_MT8196		-984
 
 #define LVTS_MSR_READ_TIMEOUT_US	400
+#define LVTS_MSR_READ_TIMEOUT_MT6893_US	4000
 #define LVTS_MSR_READ_WAIT_US		(LVTS_MSR_READ_TIMEOUT_US / 2)
 
 #define LVTS_MINIMUM_THRESHOLD		20000
@@ -107,6 +126,16 @@
 #define LVTS_MAX_CAL_OFFSETS		3
 #define LVTS_NUM_CAL_OFFSETS_MT7988	3
 #define LVTS_NUM_CAL_OFFSETS_MT8196	2
+
+#define MT6893_ATAG_DEVINFO_HDR_WORDS	1
+#define MT6893_ATAG_DEVINFO_SEG1_IDX	116
+#define MT6893_ATAG_DEVINFO_SEG1_WORDS	4
+#define MT6893_ATAG_DEVINFO_SEG2_IDX	190
+#define MT6893_ATAG_DEVINFO_SEG2_WORDS	18
+#define MT6893_ATAG_DEVINFO_MIN_SIZE	(MT6893_ATAG_DEVINFO_SEG2_IDX + \
+					 MT6893_ATAG_DEVINFO_SEG2_WORDS)
+#define MT6893_ATAG_DEVINFO_TOTAL_WORDS	(MT6893_ATAG_DEVINFO_SEG1_WORDS + \
+					 MT6893_ATAG_DEVINFO_SEG2_WORDS)
 
 static int golden_temp = LVTS_GOLDEN_TEMP_DEFAULT;
 static int golden_temp_offset;
@@ -124,6 +153,7 @@ struct lvts_sensor_data {
 
 struct lvts_ctrl_data {
 	struct lvts_sensor_data lvts_sensor[LVTS_SENSOR_MAX];
+	u8 rck_cal_offsets[LVTS_MAX_CAL_OFFSETS];
 	u8 valid_sensor_mask;
 	int offset;
 	enum lvts_msr_mode mode;
@@ -159,7 +189,16 @@ struct lvts_data {
 	int temp_offset;
 	int gt_calib_bit_offset;
 	unsigned int def_calibration;
+	unsigned int def_count_rc;
+	u32 period_unit;
+	u32 group_interval;
+	u32 filter_interval;
+	u32 sensor_interval;
+	u32 hw_filter;
+	u32 msr_read_timeout_us;
 	u16 msr_offset;
+	bool use_atag_devinfo;
+	bool manual_rck;
 };
 
 struct lvts_sensor {
@@ -176,6 +215,7 @@ struct lvts_ctrl {
 	struct lvts_sensor sensors[LVTS_SENSOR_MAX];
 	const struct lvts_data *lvts_data;
 	u32 calibration[LVTS_SENSOR_MAX];
+	u32 count_rc;
 	u8 valid_sensor_mask;
 	int mode;
 	void __iomem *base;
@@ -241,6 +281,7 @@ static const struct debugfs_reg32 lvts_regs[] = {
 	LVTS_DEBUG_FS_REGS(LVTS_IMMD1),
 	LVTS_DEBUG_FS_REGS(LVTS_IMMD2),
 	LVTS_DEBUG_FS_REGS(LVTS_IMMD3),
+	LVTS_DEBUG_FS_REGS(LVTS_RDATA0),
 	LVTS_DEBUG_FS_REGS(LVTS_PROTCTL),
 	LVTS_DEBUG_FS_REGS(LVTS_PROTTA),
 	LVTS_DEBUG_FS_REGS(LVTS_PROTTB),
@@ -322,11 +363,9 @@ static int lvts_raw_to_temp_mt7988(u32 raw_temp, int temp_factor)
 
 static u32 lvts_temp_to_raw_mt7988(int temperature, int temp_factor)
 {
-	u32 raw_temp = ((s64)(golden_temp_offset - temperature)) << 14;
+	s64 raw_temp = ((s64)(golden_temp_offset - temperature)) << 14;
 
-	raw_temp = div_s64(raw_temp, -temp_factor);
-
-	return raw_temp;
+	return div_s64(raw_temp, -temp_factor);
 }
 
 static u32 lvts_temp_to_raw_mt8196(int temperature, int temp_factor)
@@ -345,6 +384,8 @@ static int lvts_get_temp(struct thermal_zone_device *tz, int *temp)
 						   sensors[lvts_sensor->id]);
 	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
 	void __iomem *msr = lvts_sensor->msr;
+	u32 timeout_us = lvts_data->msr_read_timeout_us ?: LVTS_MSR_READ_TIMEOUT_US;
+	u32 wait_us = min_t(u32, timeout_us / 2, LVTS_MSR_READ_WAIT_US);
 	u32 value;
 	int rc;
 
@@ -359,8 +400,9 @@ static int lvts_get_temp(struct thermal_zone_device *tz, int *temp)
 	 * 16	: Valid temperature
 	 * 15-0	: Raw temperature
 	 */
-	rc = readl_poll_timeout(msr, value, value & BIT(16),
-				LVTS_MSR_READ_WAIT_US, LVTS_MSR_READ_TIMEOUT_US);
+	rc = readl_poll_timeout(msr, value,
+				(value & BIT(16)) && (value & 0xFFFF),
+				wait_us, timeout_us);
 
 	/*
 	 * As the thermal zone temperature will read before the
@@ -401,20 +443,25 @@ static void lvts_update_irq_mask(struct lvts_ctrl *lvts_ctrl)
 	value = readl(LVTS_MONINT(lvts_ctrl->base));
 
 	lvts_for_each_valid_sensor(i, lvts_ctrl) {
-		if (lvts_ctrl->sensors[i].high_thresh == lvts_ctrl->high_thresh
-		    && lvts_ctrl->sensors[i].low_thresh == lvts_ctrl->low_thresh) {
+		if (lvts_ctrl->sensors[i].high_thresh == lvts_ctrl->high_thresh &&
+		    lvts_ctrl->sensors[i].low_thresh == lvts_ctrl->low_thresh) {
 			/*
 			 * The minimum threshold needs to be configured in the
 			 * OFFSETL register to get working interrupts, but we
 			 * don't actually want to generate interrupts when
-			 * crossing it.
+			 * crossing it. Likewise, when no upper trip exists
+			 * (high == INT_MAX), keep the high-offset interrupt
+			 * masked and avoid writing an overflowed threshold.
 			 */
-			if (lvts_ctrl->low_thresh == -INT_MAX) {
+			if (lvts_ctrl->low_thresh == -INT_MAX)
 				value &= ~low_offset_inten_masks[i];
+			else
+				value |= low_offset_inten_masks[i];
+
+			if (lvts_ctrl->high_thresh == INT_MAX)
+				value &= ~high_offset_inten_masks[i];
+			else
 				value |= high_offset_inten_masks[i];
-			} else {
-				value |= low_offset_inten_masks[i] | high_offset_inten_masks[i];
-			}
 		} else {
 			value &= ~(low_offset_inten_masks[i] | high_offset_inten_masks[i]);
 		}
@@ -445,9 +492,7 @@ static int lvts_set_trips(struct thermal_zone_device *tz, int low, int high)
 						   sensors[lvts_sensor->id]);
 	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
 	void __iomem *base = lvts_sensor->base;
-	u32 raw_low = lvts_temp_to_raw(low != -INT_MAX ? low : LVTS_MINIMUM_THRESHOLD,
-				       lvts_data);
-	u32 raw_high = lvts_temp_to_raw(high, lvts_data);
+	u32 raw_low, raw_high;
 	bool should_update_thresh;
 
 	lvts_sensor->low_thresh = low;
@@ -472,9 +517,13 @@ static int lvts_set_trips(struct thermal_zone_device *tz, int low, int high)
 	 *
 	 * 14-0 : Raw temperature for threshold
 	 */
-	pr_debug("%s: Setting low limit temperature interrupt: %d\n",
-		 thermal_zone_device_type(tz), low);
-	writel(raw_low, LVTS_OFFSETL(base));
+	if (low != -INT_MAX || high != INT_MAX) {
+		raw_low = lvts_temp_to_raw(low != -INT_MAX ? low : LVTS_MINIMUM_THRESHOLD,
+					   lvts_data);
+		pr_debug("%s: Setting low limit temperature interrupt: %d\n",
+			 thermal_zone_device_type(tz), low);
+		writel(raw_low, LVTS_OFFSETL(base));
+	}
 
 	/*
 	 * High offset temperature threshold
@@ -485,17 +534,19 @@ static int lvts_set_trips(struct thermal_zone_device *tz, int low, int high)
 	 *
 	 * 14-0 : Raw temperature for threshold
 	 */
-	pr_debug("%s: Setting high limit temperature interrupt: %d\n",
-		 thermal_zone_device_type(tz), high);
-	writel(raw_high, LVTS_OFFSETH(base));
+	if (high != INT_MAX) {
+		raw_high = lvts_temp_to_raw(high, lvts_data);
+		pr_debug("%s: Setting high limit temperature interrupt: %d\n",
+			 thermal_zone_device_type(tz), high);
+		writel(raw_high, LVTS_OFFSETH(base));
+	}
 
 	return 0;
 }
 
 static irqreturn_t lvts_ctrl_irq_handler(struct lvts_ctrl *lvts_ctrl)
 {
-	irqreturn_t iret = IRQ_NONE;
-	u32 value;
+	u32 value, active;
 	static const u32 masks[] = {
 		LVTS_INT_SENSOR0,
 		LVTS_INT_SENSOR1,
@@ -567,6 +618,12 @@ static irqreturn_t lvts_ctrl_irq_handler(struct lvts_ctrl *lvts_ctrl)
 	 *                  => 0x0009001F
 	 */
 	value = readl(LVTS_MONINTSTS(lvts_ctrl->base));
+	active = value & readl(LVTS_MONINT(lvts_ctrl->base));
+	if (!active) {
+		if (value)
+			writel(value, LVTS_MONINTSTS(lvts_ctrl->base));
+		return IRQ_NONE;
+	}
 
 	/*
 	 * Let's figure out which sensors raised the interrupt
@@ -575,14 +632,12 @@ static irqreturn_t lvts_ctrl_irq_handler(struct lvts_ctrl *lvts_ctrl)
 	 * corresponding to the sensor id eg. index=0, mask for
 	 * sensor0.
 	 */
-	for (i = 0; i < ARRAY_SIZE(masks); i++) {
-
-		if (!(value & masks[i]))
+	lvts_for_each_valid_sensor(i, lvts_ctrl) {
+		if (!(active & masks[i]) || !lvts_ctrl->sensors[i].tz)
 			continue;
 
 		thermal_zone_device_update(lvts_ctrl->sensors[i].tz,
 					   THERMAL_TRIP_VIOLATED);
-		iret = IRQ_HANDLED;
 	}
 
 	/*
@@ -590,7 +645,7 @@ static irqreturn_t lvts_ctrl_irq_handler(struct lvts_ctrl *lvts_ctrl)
 	 */
 	writel(value, LVTS_MONINTSTS(lvts_ctrl->base));
 
-	return iret;
+	return IRQ_HANDLED;
 }
 
 /*
@@ -715,24 +770,34 @@ static int lvts_sensor_init(struct device *dev, struct lvts_ctrl *lvts_ctrl,
 	return 0;
 }
 
-static int lvts_decode_sensor_calibration(const struct lvts_sensor_data *sensor,
-					const u8 *efuse_calibration, u32 calib_len,
-					u8 num_offsets, u32 *calib)
+static int lvts_decode_calibration_bytes(const u8 *offsets,
+					 const u8 *efuse_calibration,
+					 size_t calib_len, u8 num_offsets,
+					 u32 *calib)
 {
 	int i;
 	u32 calib_val = 0;
 
 	for (i = 0; i < num_offsets; i++) {
-		u8 offset = sensor->cal_offsets[i];
+		u8 offset = offsets[i];
 
 		if (offset >= calib_len)
 			return -EINVAL;
-		// Pack each calibration byte into the correct position
+		/* Pack each calibration byte into the correct position */
 		calib_val |= efuse_calibration[offset] << (8 * i);
 	}
 
 	*calib = calib_val;
 	return 0;
+}
+
+static int lvts_decode_sensor_calibration(const struct lvts_sensor_data *sensor,
+					const u8 *efuse_calibration, u32 calib_len,
+					u8 num_offsets, u32 *calib)
+{
+	return lvts_decode_calibration_bytes(sensor->cal_offsets,
+					     efuse_calibration, calib_len,
+					     num_offsets, calib);
 }
 
 /*
@@ -864,6 +929,82 @@ static int lvts_calibration_init(struct device *dev, struct lvts_ctrl *lvts_ctrl
 		}
 	}
 
+	if (lvts_data->manual_rck) {
+		u32 count_rc = 0;
+
+		ret = lvts_decode_calibration_bytes(lvts_ctrl_data->rck_cal_offsets,
+						    efuse_calibration, calib_len,
+						    lvts_data->num_cal_offsets,
+						    &count_rc);
+		if (ret)
+			return ret;
+
+		lvts_ctrl->count_rc = (gt && count_rc) ? count_rc :
+				      lvts_data->def_count_rc;
+	}
+
+	return 0;
+}
+
+static int lvts_calibration_read_atag_devinfo(struct device *dev,
+					      struct lvts_domain *lvts_td)
+{
+	const size_t min_bytes = (MT6893_ATAG_DEVINFO_HDR_WORDS +
+				  MT6893_ATAG_DEVINFO_MIN_SIZE) * sizeof(u32);
+	const size_t seg1_bytes = MT6893_ATAG_DEVINFO_SEG1_WORDS * sizeof(u32);
+	const size_t seg2_bytes = MT6893_ATAG_DEVINFO_SEG2_WORDS * sizeof(u32);
+	const size_t total_bytes = MT6893_ATAG_DEVINFO_TOTAL_WORDS * sizeof(u32);
+	struct device_node *chosen;
+	const u8 *prop;
+	int prop_len = 0;
+	u32 data_size, gt;
+
+	chosen = of_find_node_by_path("/chosen");
+	if (!chosen)
+		chosen = of_find_node_by_path("/chosen@0");
+	if (!chosen) {
+		dev_err(dev, "Failed to find /chosen node for atag,devinfo\n");
+		return -ENODEV;
+	}
+
+	prop = of_get_property(chosen, "atag,devinfo", &prop_len);
+	if (!prop || prop_len < min_bytes) {
+		dev_err(dev, "Invalid or missing /chosen/atag,devinfo (len=%d)\n",
+			prop_len);
+		of_node_put(chosen);
+		return -ENODATA;
+	}
+
+	data_size = get_unaligned_le32(prop);
+	if (data_size < MT6893_ATAG_DEVINFO_MIN_SIZE) {
+		dev_err(dev, "atag,devinfo header size too small: %u\n",
+			data_size);
+		of_node_put(chosen);
+		return -EINVAL;
+	}
+
+	lvts_td->calib = devm_kzalloc(dev, total_bytes, GFP_KERNEL);
+	if (!lvts_td->calib) {
+		of_node_put(chosen);
+		return -ENOMEM;
+	}
+
+	memcpy(lvts_td->calib,
+	       prop + (MT6893_ATAG_DEVINFO_HDR_WORDS +
+		       MT6893_ATAG_DEVINFO_SEG1_IDX) * sizeof(u32),
+	       seg1_bytes);
+	memcpy(lvts_td->calib + seg1_bytes,
+	       prop + (MT6893_ATAG_DEVINFO_HDR_WORDS +
+		       MT6893_ATAG_DEVINFO_SEG2_IDX) * sizeof(u32),
+	       seg2_bytes);
+	lvts_td->calib_len = total_bytes;
+
+	of_node_put(chosen);
+
+	gt = (get_unaligned_le32(lvts_td->calib) >> 24) & 0xff;
+	dev_info(dev, "Loaded LVTS calibration from /chosen/atag,devinfo (words=%u, gt=%u)\n",
+		 data_size, gt);
+
 	return 0;
 }
 
@@ -912,6 +1053,12 @@ static int lvts_calibration_read(struct device *dev, struct lvts_domain *lvts_td
 		lvts_td->calib_len += len;
 
 		kfree(efuse);
+	}
+
+	if (!lvts_td->calib_len) {
+		if (lvts_data->use_atag_devinfo)
+			return lvts_calibration_read_atag_devinfo(dev, lvts_td);
+		return -ENODATA;
 	}
 
 	return 0;
@@ -1031,9 +1178,12 @@ static void lvts_ctrl_monitor_enable(struct device *dev, struct lvts_ctrl *lvts_
  * each write in the configuration register must be separated by a
  * delay of 2 us.
  */
-static void lvts_write_config(struct lvts_ctrl *lvts_ctrl, const u32 *cmds, int nr_cmds)
+static void lvts_write_config(struct device *dev, struct lvts_ctrl *lvts_ctrl,
+			      const u32 *cmds, int nr_cmds)
 {
-	int i;
+	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
+	u32 val;
+	int i, ret;
 
 	/*
 	 * Configuration register
@@ -1041,7 +1191,54 @@ static void lvts_write_config(struct lvts_ctrl *lvts_ctrl, const u32 *cmds, int 
 	for (i = 0; i < nr_cmds; i++) {
 		writel(cmds[i], LVTS_CONFIG(lvts_ctrl->base));
 		usleep_range(2, 4);
+		if (lvts_data->manual_rck) {
+			ret = readl_poll_timeout(LVTS_CONFIG(lvts_ctrl->base),
+						 val,
+						 !(val & LVTS_CONFIG_DEVICE_ACCESS_START),
+						 2, 200);
+			if (ret)
+				dev_warn(dev, "LVTS config write timeout (cmd=0x%08x)\n",
+					 cmds[i]);
+		}
 	}
+}
+
+static int lvts_write_device(struct device *dev, struct lvts_ctrl *lvts_ctrl,
+			     u32 config, u8 reg_idx, u8 data)
+{
+	u32 val;
+	int ret;
+
+	writel(config | ((u32)reg_idx << 8) | data, LVTS_CONFIG(lvts_ctrl->base));
+	usleep_range(3, 5);
+
+	ret = readl_poll_timeout(LVTS_CONFIG(lvts_ctrl->base), val,
+				 !(val & LVTS_CONFIG_DEVICE_ACCESS_START),
+				 2, 200);
+	if (ret)
+		dev_warn(dev, "LVTS device write timeout (reg=0x%02x)\n", reg_idx);
+
+	return ret;
+}
+
+static int lvts_read_device(struct device *dev, struct lvts_ctrl *lvts_ctrl,
+			    u32 config, u8 reg_idx, u32 *data)
+{
+	u32 val;
+	int ret;
+
+	writel(config | ((u32)reg_idx << 8), LVTS_CONFIG(lvts_ctrl->base));
+	usleep_range(5, 10);
+
+	ret = readl_poll_timeout(LVTS_CONFIG(lvts_ctrl->base), val,
+				 !(val & LVTS_CONFIG_DEVICE_ACCESS_START),
+				 2, 200);
+	if (ret)
+		dev_warn(dev, "LVTS device read timeout (reg=0x%02x)\n", reg_idx);
+
+	*data = readl(LVTS_RDATA0(lvts_ctrl->base));
+
+	return ret;
 }
 
 static int lvts_irq_init(struct lvts_ctrl *lvts_ctrl)
@@ -1117,7 +1314,7 @@ static int lvts_ctrl_connect(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
 	u32 id;
 
-	lvts_write_config(lvts_ctrl, lvts_data->conn_cmd, lvts_data->num_conn_cmd);
+	lvts_write_config(dev, lvts_ctrl, lvts_data->conn_cmd, lvts_data->num_conn_cmd);
 
 	/*
 	 * LVTS_ID : Get ID and status of the thermal controller
@@ -1128,8 +1325,10 @@ static int lvts_ctrl_connect(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	 *   7	: thermal controller connection is valid
 	 */
 	id = readl(LVTS_ID(lvts_ctrl->base));
-	if (!(id & BIT(7)))
+	if (!(id & BIT(7))) {
+		dev_err(dev, "Failed to connect to LVTS controller (id=0x%x)\n", id);
 		return -EIO;
+	}
 
 	return 0;
 }
@@ -1138,9 +1337,81 @@ static int lvts_ctrl_initialize(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 {
 	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
 
-	lvts_write_config(lvts_ctrl, lvts_data->init_cmd, lvts_data->num_init_cmd);
+	lvts_write_config(dev, lvts_ctrl, lvts_data->init_cmd, lvts_data->num_init_cmd);
 
 	return 0;
+}
+
+static void lvts_ctrl_manual_rck(struct device *dev, struct lvts_ctrl *lvts_ctrl)
+{
+	u32 val, data, rc_data, rc_now, count_rc = lvts_ctrl->count_rc;
+	int i, ret;
+
+	/* Set LVTS Manual-RCK operation */
+	lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x0E, 0x00);
+
+	lvts_for_each_valid_sensor(i, lvts_ctrl) {
+		/* Select sensor-i with RCK and configure single mode */
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x0D, i);
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x06, 0x78);
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x07, 0xA6);
+
+		/* Enable TS_EN and toggle TSDIV_EN & TSVCO_TG */
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x08, 0xF5);
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x08, 0xFC);
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x08, 0xF5);
+
+		/* Wait for analog device settle before kicking off RCK */
+		usleep_range(10, 20);
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x03, 0x02);
+		usleep_range(30, 40);
+
+		ret = readl_poll_timeout(LVTS_CONFIG(lvts_ctrl->base), val,
+					 !(val & LVTS_CONFIG_DEVICE_SENSING_STATUS),
+					 2, 200);
+		if (ret)
+			dev_warn(dev, "LVTS sensor %d RCK sensing timeout\n", i);
+
+		/* Read measured count_rc_now from device register 0x00 */
+		lvts_read_device(dev, lvts_ctrl, LVTS_DEVICE_READ_MT6893, 0x00, &data);
+		usleep_range(5, 10);
+
+		/* Disable TS_EN */
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x08, 0xF1);
+
+		rc_data = data & GENMASK(23, 0);
+		rc_now = rc_data;
+
+		/*
+		 * Refine manual RCK against factory efuse count_rc:
+		 * if measured RCK is 0 or drifts > 6.1% from efuse, fall back
+		 * to the factory efuse count_rc value.
+		 */
+		if (!rc_data) {
+			rc_now = count_rc;
+			dev_info(dev, "LVTS sensor %d RCK=0, fallback to efuse count_rc=%u\n",
+				 i, count_rc);
+		} else if (count_rc) {
+			u32 hi = max(rc_data, count_rc);
+			u32 lo = min(rc_data, count_rc);
+			u64 delta = div_u64((u64)hi * 1000, lo);
+
+			if (delta > LVTS_RCK_DELTA_THRESHOLD) {
+				rc_now = count_rc;
+				dev_info(dev,
+					 "LVTS sensor %d RCK=%u (delta=%llu), fallback to efuse count_rc=%u\n",
+					 i, rc_data, delta, count_rc);
+			}
+		}
+
+		dev_dbg(dev, "LVTS sensor %d: count_r=%u, rck_meas=%u, rck_efuse=%u, rck_use=%u\n",
+			i, lvts_ctrl->calibration[i], rc_data, count_rc, rc_now);
+
+		lvts_ctrl->calibration[i] = ((u64)rc_now * lvts_ctrl->calibration[i]) >> 14;
+	}
+
+	/* Recover sensor selection without RCK for normal temperature fetch */
+	lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893, 0x0D, 0x10);
 }
 
 static int lvts_ctrl_calibrate(struct device *dev, struct lvts_ctrl *lvts_ctrl)
@@ -1152,6 +1423,9 @@ static int lvts_ctrl_calibrate(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 		LVTS_EDATA02(lvts_ctrl->base),
 		LVTS_EDATA03(lvts_ctrl->base)
 	};
+
+	if (lvts_ctrl->lvts_data->manual_rck)
+		lvts_ctrl_manual_rck(dev, lvts_ctrl);
 
 	/*
 	 * LVTS_EDATA0X : Efuse calibration reference value for sensor X
@@ -1179,6 +1453,12 @@ static int lvts_ctrl_calibrate(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 
 static int lvts_ctrl_configure(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 {
+	const struct lvts_data *lvts_data = lvts_ctrl->lvts_data;
+	u32 hw_filter = lvts_data->hw_filter ?: LVTS_HW_FILTER;
+	u32 period_unit = lvts_data->period_unit ?: LVTS_PERIOD_UNIT;
+	u32 group_interval = lvts_data->group_interval ?: LVTS_GROUP_INTERVAL;
+	u32 filter_interval = lvts_data->filter_interval ?: LVTS_FILTER_INTERVAL;
+	u32 sensor_interval = lvts_data->sensor_interval ?: LVTS_SENSOR_INTERVAL;
 	u32 value;
 
 	/*
@@ -1197,8 +1477,12 @@ static int lvts_ctrl_configure(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	/*
 	 * LVTS_CALSCALE : ADC voltage round
 	 */
-	value = 0x300;
 	value = LVTS_CALSCALE_CONF;
+	writel(value, LVTS_CALSCALE(lvts_ctrl->base));
+
+	if (lvts_data->manual_rck)
+		lvts_write_device(dev, lvts_ctrl, LVTS_DEVICE_WRITE_MT6893,
+				  0x06, 0xB8);
 
 	/*
 	 * LVTS_MSRCTL0 : Sensor filtering strategy
@@ -1219,8 +1503,7 @@ static int lvts_ctrl_configure(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	 * 6-8  : Sensor2 filter
 	 * 9-11 : Sensor3 filter
 	 */
-	value = LVTS_HW_FILTER << 9 |  LVTS_HW_FILTER << 6 |
-			LVTS_HW_FILTER << 3 | LVTS_HW_FILTER;
+	value = hw_filter << 9 | hw_filter << 6 | hw_filter << 3 | hw_filter;
 	writel(value, LVTS_MSRCTL0(lvts_ctrl->base));
 
 	/*
@@ -1263,7 +1546,7 @@ static int lvts_ctrl_configure(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	 *       9 - 0  : Period unit
 	 *
 	 */
-	value = LVTS_GROUP_INTERVAL << 20 | LVTS_PERIOD_UNIT;
+	value = group_interval << 20 | period_unit;
 	writel(value, LVTS_MONCTL1(lvts_ctrl->base));
 
 	/*
@@ -1276,7 +1559,7 @@ static int lvts_ctrl_configure(struct device *dev, struct lvts_ctrl *lvts_ctrl)
 	 *       9-0  : Interval unit in PERIOD_UNIT between each sensor
 	 *
 	 */
-	value = LVTS_FILTER_INTERVAL << 16 | LVTS_SENSOR_INTERVAL;
+	value = filter_interval << 16 | sensor_interval;
 	writel(value, LVTS_MONCTL2(lvts_ctrl->base));
 
 	return lvts_irq_init(lvts_ctrl);
@@ -1406,6 +1689,19 @@ static int lvts_domain_init(struct device *dev, struct lvts_domain *lvts_td,
 		if (ret) {
 			dev_dbg(dev, "Failed to enable LVTS clock");
 			return ret;
+		}
+
+		if (lvts_data->manual_rck) {
+			u32 val;
+
+			writel(0, LVTS_MONCTL0(lvts_ctrl->base));
+			ret = readl_poll_timeout(LVTS_MSRCTL1(lvts_ctrl->base),
+						 val,
+						 !(val & LVTS_MSRCTL1_BUSY_MASK),
+						 2, 200);
+			if (ret)
+				dev_warn(dev, "LVTS controller %d not idle before init\n",
+					 i);
 		}
 
 		ret = lvts_ctrl_connect(dev, lvts_ctrl);
@@ -1606,6 +1902,7 @@ static int lvts_resume(struct device *dev)
 }
 
 static const u32 default_conn_cmds[] = { 0xC103FFFF, 0xC502FF55 };
+static const u32 mt6893_conn_cmds[] = { 0x8103FFFF, 0x8502FC55 };
 static const u32 mt7988_conn_cmds[] = { 0xC103FFFF, 0xC502FC55 };
 
 /*
@@ -1618,6 +1915,11 @@ static const u32 default_init_cmds[] = {
 	0xC10300FC, 0xC103009D, 0xC10300F1, 0xC10300E1
 };
 
+static const u32 mt6893_init_cmds[] = {
+	0x81030300, 0x81030420, 0x81030500, 0x81030AC4, 0x81030C7C,
+	0x8103098D, 0x810308F5, 0x810308FC, 0x810308F5, 0x810307A6
+};
+
 static const u32 mt7987_init_cmds[] = {
 	0xC1030300, 0xC1030420, 0xC1030500, 0xC10307A6, 0xC10308C7,
 	0xC103098D, 0xC1030C7C, 0xC1030AA8, 0xC10308CE, 0xC10308C7,
@@ -1628,6 +1930,102 @@ static const u32 mt7988_init_cmds[] = {
 	0xC1030300, 0xC1030420, 0xC1030500, 0xC10307A6, 0xC1030CFC,
 	0xC1030A8C, 0xC103098D, 0xC10308F1, 0xC1030B04, 0xC1030E01,
 	0xC10306B8
+};
+
+static const struct lvts_ctrl_data mt6893_lvts_mcu_data_ctrl[] = {
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_MCU_BIG_CPU0,
+			  .cal_offsets = { 0x04, 0x05, 0x06 } },
+			{ .dt_id = MT6893_MCU_BIG_CPU1,
+			  .cal_offsets = { 0x08, 0x09, 0x0a } }
+		},
+		.rck_cal_offsets = { 0x54, 0x55, 0x56 },
+		VALID_SENSOR_MAP(1, 1, 0, 0),
+		.offset = 0x0,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	},
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_MCU_BIG_CPU2,
+			  .cal_offsets = { 0x0c, 0x0d, 0x0e } },
+			{ .dt_id = MT6893_MCU_BIG_CPU3,
+			  .cal_offsets = { 0x10, 0x11, 0x12 } }
+		},
+		.rck_cal_offsets = { 0x0f, 0x0b, 0x07 },
+		VALID_SENSOR_MAP(1, 1, 0, 0),
+		.offset = 0x100,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	},
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_MCU_LITTLE_CPU0,
+			  .cal_offsets = { 0x14, 0x15, 0x16 } },
+			{ .dt_id = MT6893_MCU_LITTLE_CPU1,
+			  .cal_offsets = { 0x18, 0x19, 0x1a } },
+			{ .dt_id = MT6893_MCU_LITTLE_CPU2,
+			  .cal_offsets = { 0x1c, 0x1d, 0x1e } },
+			{ .dt_id = MT6893_MCU_LITTLE_CPU3,
+			  .cal_offsets = { 0x20, 0x21, 0x22 } }
+		},
+		.rck_cal_offsets = { 0x1b, 0x17, 0x13 },
+		VALID_SENSOR_MAP(1, 1, 1, 1),
+		.offset = 0x200,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	}
+};
+
+static const struct lvts_ctrl_data mt6893_lvts_ap_data_ctrl[] = {
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_AP_VPU0,
+			  .cal_offsets = { 0x24, 0x25, 0x26 } },
+			{ .dt_id = MT6893_AP_VPU1,
+			  .cal_offsets = { 0x28, 0x29, 0x2a } }
+		},
+		.rck_cal_offsets = { 0x27, 0x23, 0x1f },
+		VALID_SENSOR_MAP(1, 1, 0, 0),
+		.offset = 0x0,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	},
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_AP_GPU0,
+			  .cal_offsets = { 0x2c, 0x2d, 0x2e } },
+			{ .dt_id = MT6893_AP_GPU1,
+			  .cal_offsets = { 0x30, 0x31, 0x32 } }
+		},
+		.rck_cal_offsets = { 0x33, 0x2f, 0x2b },
+		VALID_SENSOR_MAP(1, 1, 0, 0),
+		.offset = 0x100,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	},
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_AP_INFRA,
+			  .cal_offsets = { 0x34, 0x35, 0x36 } },
+			{ .dt_id = MT6893_AP_CAM,
+			  .cal_offsets = { 0x38, 0x39, 0x3a } }
+		},
+		.rck_cal_offsets = { 0x3f, 0x3b, 0x37 },
+		VALID_SENSOR_MAP(1, 1, 0, 0),
+		.offset = 0x200,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	},
+	{
+		.lvts_sensor = {
+			{ .dt_id = MT6893_AP_MD0,
+			  .cal_offsets = { 0x3c, 0x3d, 0x3e } },
+			{ .dt_id = MT6893_AP_MD1,
+			  .cal_offsets = { 0x40, 0x41, 0x42 } },
+			{ .dt_id = MT6893_AP_MD2,
+			  .cal_offsets = { 0x44, 0x45, 0x46 } }
+		},
+		.rck_cal_offsets = { 0x4b, 0x47, 0x43 },
+		VALID_SENSOR_MAP(1, 1, 1, 0),
+		.offset = 0x300,
+		.mode = LVTS_MSR_FILTERED_MODE,
+	}
 };
 
 /*
@@ -2028,6 +2426,54 @@ static const struct lvts_platform_ops lvts_platform_ops_mt8196 = {
 	.lvts_temp_to_raw = lvts_temp_to_raw_mt8196,
 };
 
+static const struct lvts_data mt6893_lvts_mcu_data = {
+	.lvts_ctrl	= mt6893_lvts_mcu_data_ctrl,
+	.conn_cmd	= mt6893_conn_cmds,
+	.init_cmd	= mt6893_init_cmds,
+	.num_lvts_ctrl	= ARRAY_SIZE(mt6893_lvts_mcu_data_ctrl),
+	.num_conn_cmd	= ARRAY_SIZE(mt6893_conn_cmds),
+	.num_init_cmd	= ARRAY_SIZE(mt6893_init_cmds),
+	.temp_factor	= LVTS_COEFF_A_MT6893,
+	.temp_offset	= LVTS_COEFF_B_MT6893,
+	.gt_calib_bit_offset = 24,
+	.def_calibration = 35000,
+	.def_count_rc = LVTS_DEFAULT_COUNT_RC_MT6893,
+	.period_unit = LVTS_PERIOD_UNIT_MT6893,
+	.group_interval = LVTS_GROUP_INTERVAL_MT6893,
+	.filter_interval = LVTS_FILTER_INTERVAL_MT6893,
+	.sensor_interval = LVTS_SENSOR_INTERVAL_MT6893,
+	.hw_filter = LVTS_HW_FILTER_MT6893,
+	.msr_read_timeout_us = LVTS_MSR_READ_TIMEOUT_MT6893_US,
+	.num_cal_offsets = LVTS_NUM_CAL_OFFSETS_MT7988,
+	.ops = &lvts_platform_ops_mt7988,
+	.use_atag_devinfo = true,
+	.manual_rck = true,
+};
+
+static const struct lvts_data mt6893_lvts_ap_data = {
+	.lvts_ctrl	= mt6893_lvts_ap_data_ctrl,
+	.conn_cmd	= mt6893_conn_cmds,
+	.init_cmd	= mt6893_init_cmds,
+	.num_lvts_ctrl	= ARRAY_SIZE(mt6893_lvts_ap_data_ctrl),
+	.num_conn_cmd	= ARRAY_SIZE(mt6893_conn_cmds),
+	.num_init_cmd	= ARRAY_SIZE(mt6893_init_cmds),
+	.temp_factor	= LVTS_COEFF_A_MT6893,
+	.temp_offset	= LVTS_COEFF_B_MT6893,
+	.gt_calib_bit_offset = 24,
+	.def_calibration = 35000,
+	.def_count_rc = LVTS_DEFAULT_COUNT_RC_MT6893,
+	.period_unit = LVTS_PERIOD_UNIT_MT6893,
+	.group_interval = LVTS_GROUP_INTERVAL_MT6893,
+	.filter_interval = LVTS_FILTER_INTERVAL_MT6893,
+	.sensor_interval = LVTS_SENSOR_INTERVAL_MT6893,
+	.hw_filter = LVTS_HW_FILTER_MT6893,
+	.msr_read_timeout_us = LVTS_MSR_READ_TIMEOUT_MT6893_US,
+	.num_cal_offsets = LVTS_NUM_CAL_OFFSETS_MT7988,
+	.ops = &lvts_platform_ops_mt7988,
+	.use_atag_devinfo = true,
+	.manual_rck = true,
+};
+
 static const struct lvts_data mt7987_lvts_ap_data = {
 	.lvts_ctrl	= mt7987_lvts_ap_data_ctrl,
 	.num_lvts_ctrl	= ARRAY_SIZE(mt7987_lvts_ap_data_ctrl),
@@ -2185,6 +2631,8 @@ static const struct lvts_data mt8196_lvts_ap_data = {
 };
 
 static const struct of_device_id lvts_of_match[] = {
+	{ .compatible = "mediatek,mt6893-lvts-mcu", .data = &mt6893_lvts_mcu_data },
+	{ .compatible = "mediatek,mt6893-lvts-ap", .data = &mt6893_lvts_ap_data },
 	{ .compatible = "mediatek,mt7987-lvts-ap", .data = &mt7987_lvts_ap_data },
 	{ .compatible = "mediatek,mt7988-lvts-ap", .data = &mt7988_lvts_ap_data },
 	{ .compatible = "mediatek,mt8186-lvts", .data = &mt8186_lvts_data },

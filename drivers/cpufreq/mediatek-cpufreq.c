@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
 #include <linux/regulator/consumer.h>
+#include <linux/soc/mediatek/mtk-dvfs-lock.h>
 
 struct mtk_cpufreq_platform_data {
 	int min_volt_shift;
@@ -63,6 +64,10 @@ static struct platform_device *cpufreq_pdev;
 
 static LIST_HEAD(dvfs_info_list);
 
+/* Serializes Vproc/Vsram tracking shared with mtk-cci-devfreq */
+DEFINE_MUTEX(mtk_dvfs_vtrack_lock);
+EXPORT_SYMBOL_GPL(mtk_dvfs_vtrack_lock);
+
 static struct mtk_cpu_dvfs_info *mtk_cpu_dvfs_info_lookup(int cpu)
 {
 	struct mtk_cpu_dvfs_info *info;
@@ -84,17 +89,21 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 	int pre_vproc, pre_vsram, new_vsram, vsram, vproc, ret;
 	int retry = info->vtrack_max;
 
+	mtk_dvfs_vtrack_mutex_lock();
+
 	pre_vproc = regulator_get_voltage(proc_reg);
 	if (pre_vproc < 0) {
 		dev_err(info->cpu_dev,
 			"invalid Vproc value: %d\n", pre_vproc);
-		return pre_vproc;
+		ret = pre_vproc;
+		goto out;
 	}
 
 	pre_vsram = regulator_get_voltage(sram_reg);
 	if (pre_vsram < 0) {
 		dev_err(info->cpu_dev, "invalid Vsram value: %d\n", pre_vsram);
-		return pre_vsram;
+		ret = pre_vsram;
+		goto out;
 	}
 
 	new_vsram = clamp(new_vproc + soc_data->min_volt_shift,
@@ -108,7 +117,7 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 						    soc_data->sram_max_volt);
 
 			if (ret)
-				return ret;
+				goto out;
 
 			if (vsram == soc_data->sram_max_volt ||
 			    new_vsram == soc_data->sram_min_volt)
@@ -121,7 +130,7 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 			if (ret) {
 				regulator_set_voltage(sram_reg, pre_vsram,
 						      soc_data->sram_max_volt);
-				return ret;
+				goto out;
 			}
 		} else {
 			vproc = max(new_vproc,
@@ -129,7 +138,7 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 			ret = regulator_set_voltage(proc_reg, vproc,
 						    soc_data->proc_max_volt);
 			if (ret)
-				return ret;
+				goto out;
 
 			if (vproc == new_vproc)
 				vsram = new_vsram;
@@ -142,7 +151,7 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 			if (ret) {
 				regulator_set_voltage(proc_reg, pre_vproc,
 						      soc_data->proc_max_volt);
-				return ret;
+				goto out;
 			}
 		}
 
@@ -152,11 +161,16 @@ static int mtk_cpufreq_voltage_tracking(struct mtk_cpu_dvfs_info *info,
 		if (--retry < 0) {
 			dev_err(info->cpu_dev,
 				"over loop count, failed to set voltage\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 	} while (vproc != new_vproc || vsram != new_vsram);
 
-	return 0;
+	ret = 0;
+
+out:
+	mtk_dvfs_vtrack_mutex_unlock();
+	return ret;
 }
 
 static int mtk_cpufreq_set_voltage(struct mtk_cpu_dvfs_info *info, int vproc)
@@ -624,6 +638,7 @@ static struct cpufreq_driver mtk_cpufreq_driver = {
 	.init = mtk_cpufreq_init,
 	.exit = mtk_cpufreq_exit,
 	.register_em = cpufreq_register_em_with_opp,
+	.set_boost = cpufreq_boost_set_sw,
 	.name = "mtk-cpufreq",
 };
 
@@ -680,6 +695,15 @@ static struct platform_driver mtk_cpufreq_platdrv = {
 		.name	= "mtk-cpufreq",
 	},
 	.probe		= mtk_cpufreq_probe,
+};
+
+static const struct mtk_cpufreq_platform_data mt6893_platform_data = {
+	.min_volt_shift = 100000,
+	.max_volt_shift = 250000,
+	.proc_max_volt = 1050000,
+	.sram_min_volt = 850000,
+	.sram_max_volt = 1118750,
+	.ccifreq_supported = true,
 };
 
 static const struct mtk_cpufreq_platform_data mt2701_platform_data = {
@@ -747,6 +771,8 @@ static const struct mtk_cpufreq_platform_data mt8516_platform_data = {
 static const struct of_device_id mtk_cpufreq_machines[] __initconst __maybe_unused = {
 	{ .compatible = "mediatek,mt2701", .data = &mt2701_platform_data },
 	{ .compatible = "mediatek,mt2712", .data = &mt2701_platform_data },
+	{ .compatible = "mediatek,mt6893", .data = &mt6893_platform_data },
+	{ .compatible = "mediatek,MT6893", .data = &mt6893_platform_data },
 	{ .compatible = "mediatek,mt7622", .data = &mt7622_platform_data },
 	{ .compatible = "mediatek,mt7623", .data = &mt7623_platform_data },
 	{ .compatible = "mediatek,mt7988a", .data = &mt7988_platform_data },

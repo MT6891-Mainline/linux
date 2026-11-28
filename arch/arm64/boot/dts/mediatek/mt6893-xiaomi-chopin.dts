@@ -486,11 +486,6 @@
 		compatible = "mediatek,mcucfg_mp0_counter";
 		reg_mp0_counter_base = <0x39>;
 	};
-	mcusys_ctrl: mcusys-ctrl@0c53a000 {
-		compatible = "mediatek,mcusys-ctrl";
-		reg = <0x0 0xc53a000 0x0 0x1000>;
-		phandle = <0xfa>;
-	};
 	dsu-pmu-0 {
 		compatible = "arm,dsu-pmu";
 		interrupts = <0x00 0x12 0x04>;
