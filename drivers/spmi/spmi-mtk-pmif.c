@@ -69,7 +69,7 @@ struct pmif_bus {
 };
 
 struct pmif {
-	struct pmif_bus bus[PMIF_MAX_BUSES];
+	struct pmif_bus *bus[PMIF_MAX_BUSES];
 	struct ch_reg	chan;
 	const struct pmif_data *data;
 };
@@ -418,7 +418,7 @@ static int pmif_spmi_write_cmd(struct spmi_controller *ctrl, u8 opc, u8 sid,
 	struct pmif *arb = to_mtk_pmif(ctrl);
 	struct ch_reg *inf_reg;
 	int ret;
-	u32 data, wdata, cmd;
+	u32 data, wdata = 0, cmd;
 	unsigned long flags;
 
 	/* Check for argument validation. */
@@ -682,12 +682,21 @@ static void mtk_spmi_irq_remove(struct pmif_bus *pbus)
 	irq_domain_remove(pbus->dom);
 }
 
+static void mtk_spmi_bus_remove(struct pmif_bus *pbus)
+{
+	spmi_controller_remove(pbus->ctrl);
+	mtk_spmi_irq_remove(pbus);
+	clk_bulk_disable_unprepare(pbus->nclks, pbus->clks);
+	clk_bulk_put(pbus->nclks, pbus->clks);
+}
+
 static int mtk_spmi_bus_probe(struct platform_device *pdev,
 			      struct device_node *node,
 			      const struct pmif_data *pdata,
-			      struct pmif_bus *pbus)
+			      struct pmif_bus **out_pbus)
 {
 	struct spmi_controller *ctrl;
+	struct pmif_bus *pbus;
 	int err, idx, bus_id, i;
 
 	if (pdata->num_spmi_buses > 1)
@@ -726,9 +735,14 @@ static int mtk_spmi_bus_probe(struct platform_device *pdev,
 	for (i = 0; i < pbus->nclks; i++) {
 		pbus->clks[i].id = pmif_clock_names[i];
 		pbus->clks[i].clk = of_clk_get_by_name(node, pbus->clks[i].id);
-		if (IS_ERR(pbus->clks[i].clk))
-			return dev_err_probe(&pdev->dev, PTR_ERR(pbus->clks[i].clk),
-					     "Failed to get clocks\n");
+		if (IS_ERR(pbus->clks[i].clk)) {
+			err = dev_err_probe(&pdev->dev, PTR_ERR(pbus->clks[i].clk),
+					    "Failed to get clock %s\n",
+					    pbus->clks[i].id);
+			pbus->clks[i].clk = NULL;
+			clk_bulk_put(i, pbus->clks);
+			return err;
+		}
 	}
 
 	err = clk_bulk_prepare_enable(pbus->nclks, pbus->clks);
@@ -757,6 +771,8 @@ static int mtk_spmi_bus_probe(struct platform_device *pdev,
 
 	if (pbus->dom)
 		irq_set_chained_handler_and_data(pbus->irq, mtk_spmi_handle_chained_irq, pbus);
+
+	*out_pbus = pbus;
 
 	return 0;
 
@@ -787,6 +803,13 @@ static int mtk_spmi_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	chan_offset = PMIF_CHAN_OFFSET * arb->data->soc_chan;
+	arb->chan.ch_sta = PMIF_SWINF_0_STA + chan_offset;
+	arb->chan.wdata = PMIF_SWINF_0_WDATA_31_0 + chan_offset;
+	arb->chan.rdata = PMIF_SWINF_0_RDATA_31_0 + chan_offset;
+	arb->chan.ch_send = PMIF_SWINF_0_ACC + chan_offset;
+	arb->chan.ch_rdy = PMIF_SWINF_0_VLD_CLR + chan_offset;
+
 	platform_set_drvdata(pdev, arb);
 
 	if (!arb->data->num_spmi_buses) {
@@ -798,22 +821,28 @@ static int mtk_spmi_probe(struct platform_device *pdev)
 			if (!of_node_name_eq(child, "spmi"))
 				continue;
 
+			if (cur_bus >= PMIF_MAX_BUSES) {
+				dev_err(&pdev->dev,
+					"Too many SPMI buses (max %d)\n",
+					PMIF_MAX_BUSES);
+				ret = -EINVAL;
+				goto err_remove_buses;
+			}
+
 			ret = mtk_spmi_bus_probe(pdev, child, arb->data,
 						 &arb->bus[cur_bus]);
 			if (ret)
-				return ret;
+				goto err_remove_buses;
 			cur_bus++;
 		}
 	}
 
-	chan_offset = PMIF_CHAN_OFFSET * arb->data->soc_chan;
-	arb->chan.ch_sta = PMIF_SWINF_0_STA + chan_offset;
-	arb->chan.wdata = PMIF_SWINF_0_WDATA_31_0 + chan_offset;
-	arb->chan.rdata = PMIF_SWINF_0_RDATA_31_0 + chan_offset;
-	arb->chan.ch_send = PMIF_SWINF_0_ACC + chan_offset;
-	arb->chan.ch_rdy = PMIF_SWINF_0_VLD_CLR + chan_offset;
-
 	return 0;
+
+err_remove_buses:
+	while (cur_bus--)
+		mtk_spmi_bus_remove(arb->bus[cur_bus]);
+	return ret;
 }
 
 static void mtk_spmi_remove(struct platform_device *pdev)
@@ -822,15 +851,12 @@ static void mtk_spmi_remove(struct platform_device *pdev)
 	int i;
 
 	for (i = 0; i < PMIF_MAX_BUSES; i++) {
-		struct pmif_bus *pbus = &arb->bus[i];
+		struct pmif_bus *pbus = arb->bus[i];
 
-		if (!pbus->ctrl)
+		if (!pbus)
 			continue;
 
-		mtk_spmi_irq_remove(pbus);
-		spmi_controller_remove(pbus->ctrl);
-		clk_bulk_disable_unprepare(pbus->nclks, pbus->clks);
-		clk_bulk_put(pbus->nclks, pbus->clks);
+		mtk_spmi_bus_remove(pbus);
 	}
 }
 

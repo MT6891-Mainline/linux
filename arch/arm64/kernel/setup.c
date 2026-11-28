@@ -27,7 +27,9 @@
 #include <linux/panic_notifier.h>
 #include <linux/proc_fs.h>
 #include <linux/memblock.h>
+#include <linux/of.h>
 #include <linux/of_fdt.h>
+#include <linux/slab.h>
 #include <linux/efi.h>
 #include <linux/psci.h>
 #include <linux/sched/task.h>
@@ -333,6 +335,127 @@ static void __init chopin_dump_lk_dt(void)
 	of_scan_flat_dt(chopin_lk_dt_node, NULL);
 }
 
+#define CHOPIN_LK_DEVINFO_MAX	2048
+
+static u8 chopin_lk_devinfo[CHOPIN_LK_DEVINFO_MAX];
+static size_t chopin_lk_devinfo_len;
+static bool chopin_lk_devinfo_valid;
+
+static struct property chopin_lk_devinfo_prop = {
+	.name = "chopin,lk-devinfo",
+};
+
+static struct property chopin_devinfo_static_prop = {
+	.name = "chopin,devinfo-static",
+};
+
+static int __init chopin_lk_devinfo_node(unsigned long node, const char *uname,
+					 int depth, void *data)
+{
+	const void *prop;
+	int len = 0;
+
+	if (depth != 1 || (strcmp(uname, "chosen") && strcmp(uname, "chosen@0")))
+		return 0;
+
+	prop = of_get_flat_dt_prop(node, "atag,devinfo", &len);
+	if (!prop)
+		return 0;
+
+	if (len < (int)sizeof(u32) || len > CHOPIN_LK_DEVINFO_MAX ||
+	    (len % sizeof(u32))) {
+		pr_warn("CHOPIN-DTB: ignoring invalid LK /chosen/atag,devinfo (len=%d)\n",
+			len);
+		return 1;
+	}
+
+	memcpy(chopin_lk_devinfo, prop, len);
+	chopin_lk_devinfo_len = len;
+	chopin_lk_devinfo_valid = true;
+
+	return 1;
+}
+
+static void __init chopin_save_lk_devinfo(void)
+{
+	of_scan_flat_dt(chopin_lk_devinfo_node, NULL);
+	if (chopin_lk_devinfo_valid)
+		pr_info("CHOPIN-DTB: captured LK /chosen/atag,devinfo (%zu bytes)\n",
+			chopin_lk_devinfo_len);
+	else
+		pr_warn("CHOPIN-DTB: LK FDT has no valid /chosen/atag,devinfo\n");
+}
+
+static int __init chopin_restore_lk_devinfo(void)
+{
+	struct device_node *chosen;
+	struct property *prop;
+	const void *old;
+	int old_len = 0;
+	bool differs;
+	int ret;
+
+	if (!acpi_disabled)
+		return 0;
+
+	chosen = of_find_node_by_path("/chosen");
+	if (!chosen)
+		chosen = of_find_node_by_path("/chosen@0");
+	if (!chosen)
+		return 0;
+
+	if (!chopin_lk_devinfo_valid) {
+		pr_warn("CHOPIN-DTB: no live LK /chosen/atag,devinfo; keeping static DTB fallback\n");
+		of_update_property(chosen, &chopin_devinfo_static_prop);
+		of_node_put(chosen);
+		return 0;
+	}
+
+	old = of_get_property(chosen, "atag,devinfo", &old_len);
+	differs = !old || old_len < 0 ||
+		  (size_t)old_len != chopin_lk_devinfo_len ||
+		  memcmp(old, chopin_lk_devinfo, chopin_lk_devinfo_len);
+
+	prop = kzalloc_obj(*prop);
+	if (!prop)
+		goto err_mark_static;
+
+	prop->name = kstrdup("atag,devinfo", GFP_KERNEL);
+	prop->value = kmemdup(chopin_lk_devinfo, chopin_lk_devinfo_len,
+			      GFP_KERNEL);
+	prop->length = chopin_lk_devinfo_len;
+	if (!prop->name || !prop->value) {
+		kfree(prop->name);
+		kfree(prop->value);
+		kfree(prop);
+		goto err_mark_static;
+	}
+
+	ret = of_update_property(chosen, prop);
+	if (ret) {
+		pr_err("CHOPIN-DTB: failed to update /chosen/atag,devinfo (%d)\n",
+		       ret);
+		kfree(prop->name);
+		kfree(prop->value);
+		kfree(prop);
+		goto err_mark_static;
+	}
+
+	of_update_property(chosen, &chopin_lk_devinfo_prop);
+	pr_info("CHOPIN-DTB: restored LK /chosen/atag,devinfo (%zu bytes, %s static DTB)\n",
+		chopin_lk_devinfo_len,
+		differs ? "replaced" : "identical to");
+	of_node_put(chosen);
+	return 0;
+
+err_mark_static:
+	pr_warn("CHOPIN-DTB: keeping static /chosen/atag,devinfo fallback after update error\n");
+	of_update_property(chosen, &chopin_devinfo_static_prop);
+	of_node_put(chosen);
+	return 0;
+}
+early_initcall(chopin_restore_lk_devinfo);
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
 	setup_initial_init_mm(_text, _etext, _edata, _end);
@@ -380,6 +503,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 			(int)(_binary_chopin_board_dtb_end -
 			      _binary_chopin_board_dtb_start));
 		chopin_dump_lk_dt();
+		chopin_save_lk_devinfo();
 		/*
 		 * Verify rather than assign initial_boot_params directly: this
 		 * re-checks the header and, crucially, recomputes of_fdt_crc32.

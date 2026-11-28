@@ -386,7 +386,7 @@ int lm36273_bias_enable(int enable, int delayMs)
 			lm36273_reg_write_bytes(LP36273_DISP_BB_LSB, t & 0x7);
 			lm36273_reg_write_bytes(LP36273_DISP_BB_MSB, t >> 3);
 			lm36273_reg_write_bytes(LP36273_DISP_BL_ENABLE, 0x17);
-			lm36273_reg_write_bytes(LP36273_DISP_BC2, 0xcd);
+			lm36273_reg_write_bytes(LP36273_DISP_BC2, 0x85);
 			lm36273_last_tmp_bl = t;
 			/*
 			 * Say so.  Without this the replay is invisible, and "the
@@ -463,7 +463,7 @@ int lm36273_brightness_set(int level)
 	} else if (level > 0 && g_lm36273_led.level == 0) {
 		/* enable BL and current sink*/
 		lm36273_reg_write_bytes(LP36273_DISP_BL_ENABLE, 0x17);
-		lm36273_reg_write_bytes(LP36273_DISP_BC2, 0xcd);
+		lm36273_reg_write_bytes(LP36273_DISP_BC2, 0x85);
 		pr_info("%s: enable level = %d\n", __func__, level);
 	}
 

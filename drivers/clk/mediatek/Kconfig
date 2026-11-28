@@ -389,6 +389,16 @@ config COMMON_CLK_MT6893_IMP_IIC_WRAP
 	help
 	  This driver supports MediaTek MT6893 imp_iic_wrap clocks.
 
+config COMMON_CLK_MT6893_MCUCFG
+	tristate "Clock driver for MediaTek MT6893 mcucfg"
+	depends on COMMON_CLK_MT6893
+	default COMMON_CLK_MT6893
+	help
+	  This driver supports MediaTek MT6893 and MT6891 mcucfg CPU and DSU
+	  clock muxes, together with the four-way ganged ARMPLL_BL cluster
+	  clock required for glitch-free DVFS via the standard mediatek-cpufreq
+	  driver.
+
 config COMMON_CLK_MT6893_MDPSYS
 	tristate "Clock driver for MediaTek MT6893 mdpsys"
 	depends on COMMON_CLK_MT6893
