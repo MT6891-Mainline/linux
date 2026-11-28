@@ -11,6 +11,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
 #include <linux/regulator/consumer.h>
+#include <linux/soc/mediatek/mtk-dvfs-lock.h>
 
 struct mtk_ccifreq_platform_data {
 	int min_volt_shift;
@@ -28,6 +29,7 @@ struct mtk_ccifreq_drv {
 	struct clk *cci_clk;
 	struct clk *inter_clk;
 	int inter_voltage;
+	int pre_vproc;
 	unsigned long pre_freq;
 	/* Avoid race condition for regulators between notify and policy */
 	struct mutex reg_lock;
@@ -46,19 +48,25 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 	if (!drv->sram_reg) {
 		ret = regulator_set_voltage(drv->proc_reg, new_voltage,
 					    drv->soc_data->proc_max_volt);
+		if (!ret)
+			drv->pre_vproc = new_voltage;
 		return ret;
 	}
+
+	mtk_dvfs_vtrack_mutex_lock();
 
 	pre_voltage = regulator_get_voltage(drv->proc_reg);
 	if (pre_voltage < 0) {
 		dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
-		return pre_voltage;
+		ret = pre_voltage;
+		goto out;
 	}
 
 	pre_vsram = regulator_get_voltage(drv->sram_reg);
 	if (pre_vsram < 0) {
 		dev_err(dev, "invalid vsram value: %d\n", pre_vsram);
-		return pre_vsram;
+		ret = pre_vsram;
+		goto out;
 	}
 
 	new_vsram = clamp(new_voltage + soc_data->min_volt_shift,
@@ -71,7 +79,7 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 			ret = regulator_set_voltage(drv->sram_reg, vsram,
 						    soc_data->sram_max_volt);
 			if (ret)
-				return ret;
+				goto out;
 
 			if (vsram == soc_data->sram_max_volt ||
 			    new_vsram == soc_data->sram_min_volt)
@@ -84,7 +92,7 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 			if (ret) {
 				regulator_set_voltage(drv->sram_reg, pre_vsram,
 						      soc_data->sram_max_volt);
-				return ret;
+				goto out;
 			}
 		} else {
 			voltage = max(new_voltage,
@@ -92,7 +100,7 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 			ret = regulator_set_voltage(drv->proc_reg, voltage,
 						    soc_data->proc_max_volt);
 			if (ret)
-				return ret;
+				goto out;
 
 			if (voltage == new_voltage)
 				vsram = new_vsram;
@@ -105,7 +113,7 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 			if (ret) {
 				regulator_set_voltage(drv->proc_reg, pre_voltage,
 						      soc_data->proc_max_volt);
-				return ret;
+				goto out;
 			}
 		}
 
@@ -115,11 +123,17 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 		if (--retry_max < 0) {
 			dev_err(dev,
 				"over loop count, failed to set voltage\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 	} while (voltage != new_voltage || vsram != new_vsram);
 
-	return 0;
+	drv->pre_vproc = new_voltage;
+	ret = 0;
+
+out:
+	mtk_dvfs_vtrack_mutex_unlock();
+	return ret;
 }
 
 static int mtk_ccifreq_target(struct device *dev, unsigned long *freq,
@@ -153,7 +167,10 @@ static int mtk_ccifreq_target(struct device *dev, unsigned long *freq,
 	voltage = dev_pm_opp_get_voltage(opp);
 	dev_pm_opp_put(opp);
 
-	pre_voltage = regulator_get_voltage(drv->proc_reg);
+	if (unlikely(drv->pre_vproc <= 0))
+		pre_voltage = regulator_get_voltage(drv->proc_reg);
+	else
+		pre_voltage = drv->pre_vproc;
 	if (pre_voltage < 0) {
 		dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
 		ret = pre_voltage;
@@ -408,6 +425,14 @@ static void mtk_ccifreq_remove(struct platform_device *pdev)
 		regulator_disable(drv->sram_reg);
 }
 
+static const struct mtk_ccifreq_platform_data mt6893_platform_data = {
+	.min_volt_shift = 100000,
+	.max_volt_shift = 250000,
+	.proc_max_volt = 1000000,
+	.sram_min_volt = 850000,
+	.sram_max_volt = 1118750,
+};
+
 static const struct mtk_ccifreq_platform_data mt8183_platform_data = {
 	.min_volt_shift = 100000,
 	.max_volt_shift = 200000,
@@ -423,6 +448,7 @@ static const struct mtk_ccifreq_platform_data mt8186_platform_data = {
 };
 
 static const struct of_device_id mtk_ccifreq_machines[] = {
+	{ .compatible = "mediatek,mt6893-cci", .data = &mt6893_platform_data },
 	{ .compatible = "mediatek,mt8183-cci", .data = &mt8183_platform_data },
 	{ .compatible = "mediatek,mt8186-cci", .data = &mt8186_platform_data },
 	{ },
