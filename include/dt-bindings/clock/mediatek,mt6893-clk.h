@@ -482,4 +482,12 @@
 #define CLK_AUD_I2S9_B			31
 #define CLK_AUD_NR_CLK			32
 
+/* MCUCFG (mcusys) */
+
+#define CLK_MCU_ARMPLL_LL_SEL		0
+#define CLK_MCU_ARMPLL_BL_SEL		1
+#define CLK_MCU_ARMPLL_BUS_SEL		2
+#define CLK_MCU_ARMPLL_BL_GANG		3
+#define CLK_MCU_NR_CLK			4
+
 #endif /* _DT_BINDINGS_CLK_MT6893_H */
