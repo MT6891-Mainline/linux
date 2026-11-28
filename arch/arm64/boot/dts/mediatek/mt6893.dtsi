@@ -9,6 +9,8 @@
 
 /dts-v1/;
 
+#include <dt-bindings/thermal/mediatek,lvts-thermal.h>
+
 / {
 	cpus {
 		#address-cells = <0x01>;
@@ -3586,12 +3588,21 @@
 		eemg-offset-gpu = <0xff>;
 		phandle = <0x164>;
 	};
-	therm_ctrl@1100b000 {
-		compatible = "mediatek,therm_ctrl";
-		reg = <0x0 0x1100b000 0x0 0x26e200>;
-		interrupts = <0x00 0xa9 0x04 0x00 0xaa 0x04>;
-		clocks = <&infracfg_ao 0xc>;
-		clock-names = "therm-main";
+	lvts_ap: lvts@1100b000 {
+		compatible = "mediatek,mt6893-lvts-ap";
+		reg = <0x0 0x1100b000 0x0 0xc00>;
+		interrupts = <0x00 0xa9 0x04>;
+		clocks = <&infracfg_ao 0x4>;
+		#thermal-sensor-cells = <1>;
+		phandle = <0x300>;
+	};
+	lvts_mcu: lvts@11278000 {
+		compatible = "mediatek,mt6893-lvts-mcu";
+		reg = <0x0 0x11278000 0x0 0xc00>;
+		interrupts = <0x00 0xaa 0x04>;
+		clocks = <&infracfg_ao 0x4>;
+		#thermal-sensor-cells = <1>;
+		phandle = <0x301>;
 	};
 	auxadc: auxadc@11001000 {
 		compatible = "mediatek,mt6768-auxadc";
@@ -5851,99 +5862,59 @@
 		phandle = <0x1b6>;
 	};
 	spmi_bus: spmi@10027000 {
-		compatible = "mediatek,mt6885-pmif";
-		reg = <0x00 0x10027000 0x00 0xe00 0x00 0x10027f00 0x00 0x8c 0x00 0x10029000 0x00 0x100>;
-		reg-names = "pmif", "pmifmpu", "spmimst";
+		compatible = "mediatek,mt6893-spmi", "mediatek,mt6885-pmif";
+		reg = <0x00 0x10027000 0x00 0xe00>,
+		      <0x00 0x10029000 0x00 0x100>;
+		reg-names = "pmif", "spmimst";
 		interrupts = <0x00 0xdd 0x04>;
 		interrupt-names = "pmif_irq";
-		irq_event_en = <0x00 0x00 0x300000 0x100 0x00>;
-		clocks = <&infracfg_ao 0x3 &infracfg_ao 0x2 &topckgen 0x22 &topckgen 0x8d &clk26m &topckgen 0x41 &clk26m &topckgen 0x8d>;
-		clock-names = "pmif_sys_ck", "pmif_tmr_ck", "pmif_clk_mux", "pmif_clk_osc_d10", "pmif_clk26m", "spmimst_clk_mux", "spmimst_clk26m", "spmimst_clk_osc_d10";
-		swinf_ch_start = <0x04>;
-		ap_swinf_no = <0x02>;
+		clocks = <&infracfg_ao 0x1>,
+			 <&infracfg_ao 0x0>,
+			 <&topckgen 0x94>;
+		clock-names = "pmif_sys_ck", "pmif_tmr_ck", "spmimst_clk_mux";
 		#address-cells = <0x02>;
 		#size-cells = <0x00>;
-		grpid = <0x0b>;
 		phandle = <0x1ba>;
 
 		mt6315_6: mt6315@6 {
-			compatible = "mediatek,mt6315", "mtk,spmi-pmic";
-			reg = <0x06 0x00 0x0b 0x01>;
-			#address-cells = <0x01>;
-			#size-cells = <0x00>;
+			compatible = "mediatek,mt6315-regulator";
+			reg = <0x06 0x00>;
 			phandle = <0x1bb>;
 
-			mt6315_6_regulator: mt6315_6_regulator {
-				compatible = "mediatek,mt6315_6-regulator";
-				interrupt-parent = <&pio>;
-				interrupts = <0x01 0x04 0x01 0x00>;
-				interrupt-controller;
-				#interrupt-cells = <0x02>;
-				phandle = <0x98>;
-
-				mt6315_6_vbuck1: 6_vbuck1 {
+			regulators {
+				mt6315_6_vbuck1: vbuck1 {
 					regulator-name = "6_vbuck1";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
+					regulator-min-microvolt = <300000>;
+					regulator-max-microvolt = <1193750>;
+					regulator-enable-ramp-delay = <256>;
+					regulator-always-on;
 					phandle = <0x6e>;
-				};
-
-				mt6315_6_vbuck3: 6_vbuck3 {
-					regulator-name = "6_vbuck3";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
-					phandle = <0x1bc>;
-				};
-
-				mt6315_6_vbuck4: 6_vbuck4 {
-					regulator-name = "6_vbuck4";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
-					phandle = <0x1bd>;
 				};
 			};
 		};
 
 		mt6315_7: mt6315@7 {
-			compatible = "mediatek,mt6315", "mtk,spmi-pmic";
-			reg = <0x07 0x00 0x0b 0x01>;
-			#address-cells = <0x01>;
-			#size-cells = <0x00>;
+			compatible = "mediatek,mt6315-regulator";
+			reg = <0x07 0x00>;
 			phandle = <0x1be>;
 
-			mt6315_7_regulator: mt6315_7_regulator {
-				compatible = "mediatek,mt6315_7-regulator";
-				interrupt-parent = <&pio>;
-				interrupts = <0xa7 0x04 0xa7 0x00>;
-				interrupt-controller;
-				#interrupt-cells = <0x02>;
-				phandle = <0x99>;
-
-				mt6315_7_vbuck1: 7_vbuck1 {
+			regulators {
+				mt6315_7_vbuck1: vbuck1 {
 					regulator-name = "7_vbuck1";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
+					regulator-min-microvolt = <300000>;
+					regulator-max-microvolt = <1193750>;
+					regulator-enable-ramp-delay = <256>;
+					regulator-always-on;
 					phandle = <0x9b>;
 				};
 
-				mt6315_7_vbuck3: 7_vbuck3 {
+				mt6315_7_vbuck3: vbuck3 {
 					regulator-name = "7_vbuck3";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
+					regulator-min-microvolt = <300000>;
+					regulator-max-microvolt = <1193750>;
+					regulator-enable-ramp-delay = <256>;
+					regulator-always-on;
 					phandle = <0x6f>;
-				};
-
-				mt6315_7_vbuck4: 7_vbuck4 {
-					regulator-name = "7_vbuck4";
-					regulator-min-microvolt = <0x493e0>;
-					regulator-max-microvolt = <0x123716>;
-					regulator-enable-ramp-delay = <0x100>;
-					phandle = <0x1bf>;
 				};
 			};
 		};
@@ -5954,6 +5925,7 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			phandle = <0x1c0>;
+			status = "disabled";
 
 			mt6315_3_regulator: mt6315_3_regulator {
 				compatible = "mediatek,mt6315_3-regulator";
@@ -6253,5 +6225,210 @@
 		clocks = <&clk26m &clk26m &clk26m &clk26m &clk26m>;
 		clock-names = "apb", "smi", "async", "gals0", "gals1";
 		phandle = <0x288>;
+	};
+	thermal_zones: thermal-zones {
+		cpu-big0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big3-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU3>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little3-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU3>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		vpu0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_VPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		vpu1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_VPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		gpu0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_GPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		gpu1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_GPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		infra-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_INFRA>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cam-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_CAM>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
 	};
 };
