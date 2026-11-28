@@ -9,6 +9,8 @@
 
 /dts-v1/;
 
+#include <dt-bindings/thermal/mediatek,lvts-thermal.h>
+
 / {
 	cpus {
 		#address-cells = <0x01>;
@@ -3586,12 +3588,21 @@
 		eemg-offset-gpu = <0xff>;
 		phandle = <0x164>;
 	};
-	therm_ctrl@1100b000 {
-		compatible = "mediatek,therm_ctrl";
-		reg = <0x0 0x1100b000 0x0 0x26e200>;
-		interrupts = <0x00 0xa9 0x04 0x00 0xaa 0x04>;
-		clocks = <&infracfg_ao 0xc>;
-		clock-names = "therm-main";
+	lvts_ap: lvts@1100b000 {
+		compatible = "mediatek,mt6893-lvts-ap";
+		reg = <0x0 0x1100b000 0x0 0xc00>;
+		interrupts = <0x00 0xa9 0x04>;
+		clocks = <&infracfg_ao 0x4>;
+		#thermal-sensor-cells = <1>;
+		phandle = <0x300>;
+	};
+	lvts_mcu: lvts@11278000 {
+		compatible = "mediatek,mt6893-lvts-mcu";
+		reg = <0x0 0x11278000 0x0 0xc00>;
+		interrupts = <0x00 0xaa 0x04>;
+		clocks = <&infracfg_ao 0x4>;
+		#thermal-sensor-cells = <1>;
+		phandle = <0x301>;
 	};
 	auxadc: auxadc@11001000 {
 		compatible = "mediatek,mt6768-auxadc";
@@ -6214,5 +6225,210 @@
 		clocks = <&clk26m &clk26m &clk26m &clk26m &clk26m>;
 		clock-names = "apb", "smi", "async", "gals0", "gals1";
 		phandle = <0x288>;
+	};
+	thermal_zones: thermal-zones {
+		cpu-big0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-big3-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU3>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cpu-little3-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_mcu MT6893_MCU_LITTLE_CPU3>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		vpu0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_VPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		vpu1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_VPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		gpu0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_GPU0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		gpu1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_GPU1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		infra-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_INFRA>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		cam-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_CAM>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md0-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD0>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md1-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD1>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
+
+		md2-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+			thermal-sensors = <&lvts_ap MT6893_AP_MD2>;
+
+			trips {
+			};
+
+			cooling-maps {
+			};
+		};
 	};
 };
