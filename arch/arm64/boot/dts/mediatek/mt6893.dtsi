@@ -3631,25 +3631,12 @@
 		clocks = <&infracfg_ao 0x12 &infracfg_ao 0x13 &infracfg_ao 0x14 &infracfg_ao 0x15 &infracfg_ao 0x11 &infracfg_ao 0x16>;
 		clock-names = "PWM1-main", "PWM2-main", "PWM3-main", "PWM4-main", "PWM-HCLK-main", "PWM-main";
 	};
-	eem_fsm: eem_fsm@11278000 {
-		compatible = "mediatek,eem_fsm";
-		reg = <0x0 0x11278000 0x0 0x1000>;
+	svs: svs@11278c00 {
+		compatible = "mediatek,mt6893-svs";
+		reg = <0x0 0x11278c00 0x0 0x400>;
 		interrupts = <0x00 0xa8 0x04>;
-		clocks = <&infracfg_ao 0xc>;
-		clock-names = "therm-main";
-		eem-status = <0x01>;
-		eem-initmon-little = <0x0f>;
-		eem-initmon-big = <0x0f>;
-		eem-initmon-cci = <0x0f>;
-		eem-initmon-gpu = <0x0f>;
-		eem-clamp-little = <0x0>;
-		eem-clamp-big = <0x0>;
-		eem-clamp-cci = <0x0>;
-		eem-clamp-gpu = <0x0>;
-		eem-offset-little = <0xff>;
-		eem-offset-big = <0xff>;
-		eem-offset-cci = <0xff>;
-		eem-offset-gpu = <0xff>;
+		clocks = <&infracfg_ao 0x4>;
+		clock-names = "main";
 		phandle = <0x163>;
 	};
 	eemgpu_fsm: eemgpu_fsm@1100b000 {

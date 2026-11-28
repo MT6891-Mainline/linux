@@ -13,6 +13,7 @@
 #include <linux/cpu.h>
 #include <linux/cpuidle.h>
 #include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -34,6 +35,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/thermal.h>
+#include <linux/unaligned.h>
 
 /* svs bank mode support */
 #define SVSB_MODE_ALL_DISABLE		0
@@ -136,6 +138,26 @@
 #define SVSB_DET_CLK_EN			BIT(31)
 #define SVSB_TEMP_LOWER_BOUND		0xb2
 #define SVSB_TEMP_UPPER_BOUND		0x64
+
+/* MT6893 / MT6891 segmented INIT02 constants */
+#define MT6893_ATAG_DEVINFO_HDR_WORDS	1
+#define MT6893_ATAG_DEVINFO_SEG_IDX	30
+#define MT6893_ATAG_DEVINFO_EEM_START	50
+#define MT6893_ATAG_DEVINFO_EEM_WORDS	14
+#define MT6893_ATAG_DEVINFO_MIN_SIZE	(MT6893_ATAG_DEVINFO_EEM_START + \
+					 MT6893_ATAG_DEVINFO_EEM_WORDS)
+#define MT6893_EFUSE_SEG_SLOT		MT6893_ATAG_DEVINFO_EEM_WORDS
+#define MT6893_EFUSE_TOTAL_WORDS	(MT6893_ATAG_DEVINFO_EEM_WORDS + 1)
+#define MT6893_SVS_MAX_SEGS		3
+#define MT6893_SVS_MAX_SUBBANKS		2
+#define MT6893_SVS_LOW_TEMP_MC		18000
+#define MT6893_SVS_LOW_TEMP_OFF		8
+#define MT6893_SVS_HIGH_TEMP_OFF	3
+#define MT6893_SVS_VMIN_SAFE		0x20 /* 600 mV: keeps Vsram(850mV)-Vproc <= 250mV */
+
+static bool svs_dry_run;
+module_param_named(dry_run, svs_dry_run, bool, 0444);
+MODULE_PARM_DESC(dry_run, "Compute and log MT6893 SVS voltages without updating OPP tables");
 
 static DEFINE_SPINLOCK(svs_lock);
 
@@ -398,6 +420,15 @@ struct svs_platform {
 	u32 *tefuse;
 	u32 ts_coeff;
 	u16 bank_max;
+	bool use_atag_devinfo;
+	bool segmented_init02;
+	struct completion seg_completion;
+	u32 seg_core_sel;
+	u32 seg_int_st;
+	u32 seg_vdesign30;
+	u32 seg_vop30;
+	int seg_bank_idx;
+	int seg_err;
 };
 
 struct svs_platform_data {
@@ -409,6 +440,8 @@ struct svs_platform_data {
 	const u32 *regs;
 	u32 ts_coeff;
 	u16 bank_max;
+	bool use_atag_devinfo;
+	bool segmented_init02;
 };
 
 /**
@@ -805,7 +838,11 @@ static ssize_t svs_enable_debug_write(struct file *filp,
 
 	if (!enabled) {
 		svs_bank_disable_and_restore_default_volts(svsp, svsb);
-		svsb->mode_support = SVSB_MODE_ALL_DISABLE;
+		if (!svsp->segmented_init02)
+			svsb->mode_support = SVSB_MODE_ALL_DISABLE;
+	} else if (svsp->segmented_init02 && svsb->volt[0]) {
+		svsb->phase = SVSB_PHASE_INIT02;
+		svs_adjust_pm_opp_volts(svsb);
 	}
 
 	return count;
@@ -1372,6 +1409,50 @@ static inline void svs_mon_mode_isr_handler(struct svs_platform *svsp,
 	svs_writel_relaxed(svsp, SVSB_INTSTS_FLD_MONVOP, INTSTS);
 }
 
+static irqreturn_t svs_mt6893_isr(struct svs_platform *svsp)
+{
+	unsigned long flags;
+	u32 int_sts, svs_en;
+
+	spin_lock_irqsave(&svs_lock, flags);
+
+	if (!svsp->seg_int_st ||
+	    (svsp->seg_int_st & svs_readl_relaxed(svsp, INTST))) {
+		spin_unlock_irqrestore(&svs_lock, flags);
+		return IRQ_NONE;
+	}
+
+	svs_writel_relaxed(svsp, svsp->seg_core_sel, CORESEL);
+	int_sts = svs_readl_relaxed(svsp, INTSTS);
+	svs_en = svs_readl_relaxed(svsp, SVSEN);
+
+	if (int_sts == SVSB_INTSTS_F0_COMPLETE &&
+	    (svs_en & GENMASK(2, 0)) == SVSB_PTPEN_INIT02) {
+		svs_save_bank_register_data(svsp, svsp->seg_bank_idx,
+					    SVSB_PHASE_INIT02);
+		svsp->seg_vdesign30 = svs_readl_relaxed(svsp, VDESIGN30);
+		svsp->seg_vop30 = svs_readl_relaxed(svsp, VOP30);
+		svsp->seg_err = 0;
+	} else {
+		dev_err(svsp->dev,
+			"INIT02 err: CORESEL=0x%08x SVSEN=0x%08x INTSTS=0x%08x SM0=0x%08x SM1=0x%08x\n",
+			svs_readl_relaxed(svsp, CORESEL), svs_en, int_sts,
+			svs_readl_relaxed(svsp, SMSTATE0),
+			svs_readl_relaxed(svsp, SMSTATE1));
+		svsp->seg_err = -EIO;
+	}
+
+	svs_writel_relaxed(svsp, SVSB_PTPEN_OFF, SVSEN);
+	svs_writel_relaxed(svsp, 0xffffffff, INTSTS);
+	svsp->seg_int_st = 0;
+
+	spin_unlock_irqrestore(&svs_lock, flags);
+
+	complete(&svsp->seg_completion);
+
+	return IRQ_HANDLED;
+}
+
 static irqreturn_t svs_isr(int irq, void *data)
 {
 	struct svs_platform *svsp = data;
@@ -1379,6 +1460,9 @@ static irqreturn_t svs_isr(int irq, void *data)
 	struct svs_bank *svsb = NULL;
 	unsigned long flags;
 	u32 idx, int_sts, svs_en;
+
+	if (svsp->segmented_init02)
+		return svs_mt6893_isr(svsp);
 
 	for (idx = 0; idx < svsp->bank_max; idx++) {
 		svsb = &svsp->banks[idx];
@@ -1607,6 +1691,8 @@ svs_init01_resume_cpuidle:
 	return ret;
 }
 
+static int svs_mt6893_init02(struct svs_platform *svsp);
+
 static int svs_init02(struct svs_platform *svsp)
 {
 	const struct svs_bank_pdata *bdata;
@@ -1617,6 +1703,9 @@ static int svs_init02(struct svs_platform *svsp)
 
 	if (!svs_mode_available(svsp, SVSB_MODE_INIT02))
 		return 0;
+
+	if (svsp->segmented_init02)
+		return svs_mt6893_init02(svsp);
 
 	for (idx = 0; idx < svsp->bank_max; idx++) {
 		svsb = &svsp->banks[idx];
@@ -2273,6 +2362,624 @@ static int svs_mt8183_platform_probe(struct svs_platform *svsp)
 	return 0;
 }
 
+struct svs_mt6893_subbank {
+	const char *name;
+	u32 core_sel;
+	u32 int_st;
+	u32 ctl0;
+	u32 freq_base_mhz;
+	u32 turn_freq_mhz[MT6893_SVS_MAX_SEGS + 1];
+	u8 fuse_idx[MT6893_SVS_MAX_SEGS];
+	u8 num_segs;
+	bool copy_opp14_to_15;
+};
+
+struct svs_mt6893_bank_cfg {
+	struct svs_mt6893_subbank subbanks[MT6893_SVS_MAX_SUBBANKS];
+	u8 num_subbanks;
+};
+
+static const struct svs_mt6893_bank_cfg svs_mt6893_cfgs[] = {
+	[0] = {
+		/* Logical CPU Little (cpu0..3) -> HW bank 0 (L) */
+		.num_subbanks = 1,
+		.subbanks = {
+			{
+				.name = "L",
+				.core_sel = 0x0fff0100,
+				.int_st = BIT(0),
+				.ctl0 = 0xba98000f,
+				.freq_base_mhz = 1000,
+				.turn_freq_mhz = { 2000, 1600, 0, 0 },
+				.fuse_idx = { 1, 2, 0 },
+				.num_segs = 2,
+			},
+		},
+	},
+	[1] = {
+		/* Logical CPU Big (cpu4..7) -> max(HW bank 1 BL, HW bank 2 B) */
+		.num_subbanks = 2,
+		.subbanks = {
+			{
+				.name = "BL",
+				.core_sel = 0x0fff0101,
+				.int_st = BIT(1),
+				.ctl0 = 0x05400007,
+				.freq_base_mhz = 2600,
+				.turn_freq_mhz = { 2800, 2600, 1740, 0 },
+				.fuse_idx = { 3, 4, 5 },
+				.num_segs = 3,
+				.copy_opp14_to_15 = true,
+			},
+			{
+				.name = "B",
+				.core_sel = 0x0fff0102,
+				.int_st = BIT(2),
+				.ctl0 = 0x00010001,
+				.freq_base_mhz = 2000,
+				.turn_freq_mhz = { 3000, 2600, 1820, 0 },
+				.fuse_idx = { 7, 8, 9 },
+				.num_segs = 3,
+			},
+		},
+	},
+	[2] = {
+		/* Logical CCI/DSU -> HW bank 3 (CCI) */
+		.num_subbanks = 1,
+		.subbanks = {
+			{
+				.name = "CCI",
+				.core_sel = 0x0fff0103,
+				.int_st = BIT(3),
+				.ctl0 = 0xba98000f,
+				.freq_base_mhz = 1000,
+				.turn_freq_mhz = { 1700, 1400, 1200, 0 },
+				.fuse_idx = { 10, 11, 12 },
+				.num_segs = 3,
+			},
+		},
+	},
+};
+
+static int svs_mt6893_run_subbank(struct svs_platform *svsp,
+				  unsigned int bank_idx,
+				  const struct svs_mt6893_subbank *sub,
+				  u32 out_volt[MAX_OPP_ENTRIES])
+{
+	struct svs_bank *svsb = &svsp->banks[bank_idx];
+	const struct svs_bank_pdata *bdata = &svsb->pdata;
+	u32 pct[MAX_OPP_ENTRIES];
+	u8 str_pt[MT6893_SVS_MAX_SEGS] = { 0 };
+	u8 end_pt[MT6893_SVS_MAX_SEGS] = { 0 };
+	bool seg_used[MT6893_SVS_MAX_SEGS] = { false };
+	u32 dcbdet, dcmdet, freq_base_hz;
+	unsigned int i, s, last_s = 0;
+	int seg;
+
+	dcbdet = (svsp->efuse[13] >> 16) & GENMASK(7, 0);
+	dcmdet = (svsp->efuse[13] >> 24) & GENMASK(7, 0);
+	freq_base_hz = sub->freq_base_mhz * 1000000U;
+
+	for (i = 0; i < bdata->opp_count; i++) {
+		u32 freq_mhz = svsb->opp_dfreq[i] / 1000000U;
+
+		pct[i] = percent(svsb->opp_dfreq[i], freq_base_hz);
+
+		for (s = 0; s < sub->num_segs && sub->turn_freq_mhz[s]; s++) {
+			if (freq_mhz > sub->turn_freq_mhz[s] ||
+			    (freq_mhz > sub->turn_freq_mhz[s + 1] &&
+			     freq_mhz <= sub->turn_freq_mhz[s])) {
+				if (!seg_used[s]) {
+					str_pt[s] = i;
+					seg_used[s] = true;
+					if (s > 0 && seg_used[s - 1])
+						end_pt[s - 1] = i - 1;
+				}
+				break;
+			}
+		}
+		if (s == sub->num_segs) {
+			s = sub->num_segs - 1;
+			if (!seg_used[s]) {
+				str_pt[s] = i;
+				seg_used[s] = true;
+			}
+		}
+		last_s = s;
+	}
+	end_pt[last_s] = bdata->opp_count - 1;
+
+	/* Run active segments from lowest to highest frequency, matching vendor EEM */
+	for (seg = sub->num_segs - 1; seg >= 0; seg--) {
+		u32 fuse_word, mdes, bdes, mtdes;
+		u32 des_char, temp_char, det_char, limit_vals, freqpct30;
+		u32 vdesign30, vop30, v_hi, v_lo, cs_rb;
+		unsigned long flags, time_left;
+
+		if (!seg_used[seg])
+			continue;
+
+		fuse_word = svsp->efuse[sub->fuse_idx[seg]];
+		mtdes = fuse_word & GENMASK(7, 0);
+		bdes = (fuse_word >> 16) & GENMASK(7, 0);
+		mdes = (fuse_word >> 24) & GENMASK(7, 0);
+
+		des_char = FIELD_PREP(SVSB_DESCHAR_FLD_BDES, bdes) |
+			   FIELD_PREP(SVSB_DESCHAR_FLD_MDES, mdes);
+		temp_char = FIELD_PREP(SVSB_TEMPCHAR_FLD_VCO, bdata->vco) |
+			    FIELD_PREP(SVSB_TEMPCHAR_FLD_MTDES, mtdes) |
+			    FIELD_PREP(SVSB_TEMPCHAR_FLD_DVT_FIXED, svsb->dvt_fixed);
+		det_char = FIELD_PREP(SVSB_DETCHAR_FLD_DCBDET, dcbdet) |
+			   FIELD_PREP(SVSB_DETCHAR_FLD_DCMDET, dcmdet);
+		limit_vals = FIELD_PREP(SVSB_LIMITVALS_FLD_DTLO, SVSB_VAL_DTLO) |
+			     FIELD_PREP(SVSB_LIMITVALS_FLD_DTHI, SVSB_VAL_DTHI) |
+			     FIELD_PREP(SVSB_LIMITVALS_FLD_VMIN, svsb->vmin) |
+			     FIELD_PREP(SVSB_LIMITVALS_FLD_VMAX, svsb->vmax);
+		freqpct30 = (pct[str_pt[seg]] & GENMASK(7, 0)) |
+			    ((pct[end_pt[seg]] & GENMASK(7, 0)) << 8);
+
+		reinit_completion(&svsp->seg_completion);
+
+		spin_lock_irqsave(&svs_lock, flags);
+		svsp->seg_core_sel = sub->core_sel;
+		svsp->seg_int_st = sub->int_st;
+		svsp->seg_bank_idx = bank_idx;
+		svsp->seg_vdesign30 = 0;
+		svsp->seg_vop30 = 0;
+		svsp->seg_err = 0;
+
+		svs_writel_relaxed(svsp, sub->core_sel, CORESEL);
+		cs_rb = svs_readl_relaxed(svsp, CORESEL);
+		if ((cs_rb & GENMASK(2, 0)) != (sub->core_sel & GENMASK(2, 0))) {
+			svsp->seg_int_st = 0;
+			spin_unlock_irqrestore(&svs_lock, flags);
+			dev_err(svsb->dev, "%s seg%d CORESEL mismatch: 0x%08x != 0x%08x\n",
+				sub->name, seg, cs_rb, sub->core_sel);
+			return -EIO;
+		}
+
+		svs_writel_relaxed(svsp, des_char, DESCHAR);
+		svs_writel_relaxed(svsp, temp_char, TEMPCHAR);
+		svs_writel_relaxed(svsp, det_char, DETCHAR);
+		svs_writel_relaxed(svsp, bdata->dc_config, DCCONFIG);
+		svs_writel_relaxed(svsp, bdata->age_config, AGECONFIG);
+		svs_writel_relaxed(svsp, SVSB_RUNCONFIG_DEFAULT, RUNCONFIG);
+		svs_writel_relaxed(svsp, freqpct30, FREQPCT30);
+		svs_writel_relaxed(svsp, 0, FREQPCT74);
+		svs_writel_relaxed(svsp, limit_vals, LIMITVALS);
+		svs_writel_relaxed(svsp, SVSB_DET_WINDOW, DETWINDOW);
+		svs_writel_relaxed(svsp, SVSB_DET_MAX, CONFIG);
+		svs_writel_relaxed(svsp, bdata->chk_shift, CHKSHIFT);
+		svs_writel_relaxed(svsp, sub->ctl0, CTL0);
+		svs_writel_relaxed(svsp, 0xffffffff, INTSTS);
+		svs_writel_relaxed(svsp, 0, INIT2VALS);
+		svs_writel_relaxed(svsp, SVSB_INTEN_INIT0x, INTEN);
+		svs_writel_relaxed(svsp, SVSB_PTPEN_INIT02, SVSEN);
+		spin_unlock_irqrestore(&svs_lock, flags);
+
+		time_left = wait_for_completion_timeout(&svsp->seg_completion,
+							msecs_to_jiffies(5000));
+		if (!time_left) {
+			spin_lock_irqsave(&svs_lock, flags);
+			svs_writel_relaxed(svsp, sub->core_sel, CORESEL);
+			svs_writel_relaxed(svsp, SVSB_PTPEN_OFF, SVSEN);
+			svs_writel_relaxed(svsp, 0xffffffff, INTSTS);
+			svsp->seg_int_st = 0;
+			spin_unlock_irqrestore(&svs_lock, flags);
+			dev_err(svsb->dev, "%s seg%d INIT02 timeout\n",
+				sub->name, seg);
+			return -ETIMEDOUT;
+		}
+
+		if (svsp->seg_err) {
+			dev_err(svsb->dev, "%s seg%d INIT02 hw error: %d\n",
+				sub->name, seg, svsp->seg_err);
+			return svsp->seg_err;
+		}
+
+		vdesign30 = svsp->seg_vdesign30;
+		vop30 = svsp->seg_vop30;
+		v_hi = vdesign30 & GENMASK(7, 0);
+		v_lo = (vdesign30 >> 8) & GENMASK(7, 0);
+
+		dev_info(svsb->dev,
+			 "%s seg%d OPP[%u..%u] (%u..%u MHz) FREQPCT30=0x%04x VDESIGN30=0x%08x VOP30=0x%08x (v_hi=%uuV v_lo=%uuV)\n",
+			 sub->name, seg, str_pt[seg], end_pt[seg],
+			 svsb->opp_dfreq[str_pt[seg]] / 1000000U,
+			 svsb->opp_dfreq[end_pt[seg]] / 1000000U,
+			 freqpct30, vdesign30, vop30,
+			 svs_bank_volt_to_opp_volt(v_hi, bdata->volt_step, bdata->volt_base),
+			 svs_bank_volt_to_opp_volt(v_lo, bdata->volt_step, bdata->volt_base));
+
+		if (!v_hi || !v_lo) {
+			dev_err(svsb->dev, "%s seg%d invalid zero VDESIGN30=0x%08x\n",
+				sub->name, seg, vdesign30);
+			return -EINVAL;
+		}
+
+		if (v_hi < v_lo)
+			v_hi = v_lo;
+
+		out_volt[str_pt[seg]] = v_hi;
+		out_volt[end_pt[seg]] = v_lo;
+		for (i = str_pt[seg] + 1; i < end_pt[seg]; i++)
+			out_volt[i] = interpolate(pct[str_pt[seg]], pct[end_pt[seg]],
+						  v_hi, v_lo, pct[i]);
+
+		usleep_range(200, 250);
+	}
+
+	if (sub->copy_opp14_to_15 && bdata->opp_count >= 16)
+		out_volt[15] = out_volt[14];
+
+	for (i = 0; i < bdata->opp_count; i++) {
+		if (!out_volt[i]) {
+			dev_err(svsb->dev, "%s missing OPP[%u] voltage\n",
+				sub->name, i);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int svs_mt6893_init02(struct svs_platform *svsp)
+{
+	u32 idx, i, sb;
+	bool any_ok = false;
+
+	for (idx = 0; idx < svsp->bank_max; idx++) {
+		struct svs_bank *svsb = &svsp->banks[idx];
+		const struct svs_bank_pdata *bdata = &svsb->pdata;
+		const struct svs_mt6893_bank_cfg *cfg = &svs_mt6893_cfgs[idx];
+		u32 sub_volt[MT6893_SVS_MAX_SUBBANKS][MAX_OPP_ENTRIES] = { { 0 } };
+		u32 merged[MAX_OPP_ENTRIES] = { 0 };
+		u32 guardband = MT6893_SVS_HIGH_TEMP_OFF;
+		int tzone_temp = 0, ret = 0;
+
+		if (!(svsb->mode_support & SVSB_MODE_INIT02))
+			continue;
+
+		for (sb = 0; sb < cfg->num_subbanks; sb++) {
+			ret = svs_mt6893_run_subbank(svsp, idx,
+						     &cfg->subbanks[sb],
+						     sub_volt[sb]);
+			if (ret) {
+				dev_err(svsb->dev,
+					"subbank %s failed (%d), keeping default OPPs\n",
+					cfg->subbanks[sb].name, ret);
+				break;
+			}
+		}
+		if (ret) {
+			svsb->phase = SVSB_PHASE_ERROR;
+			continue;
+		}
+
+		if (!IS_ERR_OR_NULL(svsb->tzd) &&
+		    !thermal_zone_get_temp(svsb->tzd, &tzone_temp) &&
+		    tzone_temp <= MT6893_SVS_LOW_TEMP_MC)
+			guardband = MT6893_SVS_LOW_TEMP_OFF;
+
+		for (i = 0; i < bdata->opp_count; i++) {
+			u32 v = sub_volt[0][i];
+			u32 opp_uv;
+
+			for (sb = 1; sb < cfg->num_subbanks; sb++)
+				v = max(v, sub_volt[sb][i]);
+
+			v = clamp_t(u32, v + guardband, svsb->vmin, svsb->vmax);
+			opp_uv = svs_bank_volt_to_opp_volt(v, bdata->volt_step,
+							   bdata->volt_base);
+			opp_uv = min(opp_uv, svsb->opp_dvolt[i]);
+			merged[i] = svs_opp_volt_to_bank_volt(opp_uv,
+							      bdata->volt_step,
+							      bdata->volt_base);
+		}
+
+		/* Enforce non-increasing voltage with descending frequency */
+		for (i = bdata->opp_count - 1; i > 0; i--) {
+			if (merged[i] > merged[i - 1])
+				merged[i - 1] = merged[i];
+		}
+
+		for (i = 0; i < bdata->opp_count; i++)
+			svsb->volt[i] = merged[i];
+
+		dev_info(svsb->dev,
+			 "INIT02 summary (guardband=+%u steps/+%uuV, temp=%dmC, dry_run=%u):\n",
+			 guardband, guardband * bdata->volt_step, tzone_temp,
+			 svs_dry_run);
+		for (i = 0; i < bdata->opp_count; i++) {
+			u32 final_uv = svs_bank_volt_to_opp_volt(svsb->volt[i],
+								 bdata->volt_step,
+								 bdata->volt_base);
+			s32 delta_uv = (s32)final_uv - (s32)svsb->opp_dvolt[i];
+
+			if (cfg->num_subbanks == 2) {
+				u32 bl_uv = svs_bank_volt_to_opp_volt(sub_volt[0][i],
+								      bdata->volt_step,
+								      bdata->volt_base);
+				u32 b_uv = svs_bank_volt_to_opp_volt(sub_volt[1][i],
+								     bdata->volt_step,
+								     bdata->volt_base);
+
+				dev_info(svsb->dev,
+					 "  OPP[%02u] %4u MHz: %7u -> %7u uV (%+7d uV) [raw BL=%u B=%u]\n",
+					 i, svsb->opp_dfreq[i] / 1000000U,
+					 svsb->opp_dvolt[i], final_uv, delta_uv,
+					 bl_uv, b_uv);
+			} else {
+				dev_info(svsb->dev,
+					 "  OPP[%02u] %4u MHz: %7u -> %7u uV (%+7d uV)\n",
+					 i, svsb->opp_dfreq[i] / 1000000U,
+					 svsb->opp_dvolt[i], final_uv, delta_uv);
+			}
+		}
+
+		if (svs_dry_run) {
+			svsb->phase = SVSB_PHASE_ERROR;
+			any_ok = true;
+			continue;
+		}
+
+		svsb->phase = SVSB_PHASE_INIT02;
+		ret = svs_adjust_pm_opp_volts(svsb);
+		if (ret) {
+			dev_err(svsb->dev, "failed to apply SVS OPPs (%d), restoring defaults\n",
+				ret);
+			svs_bank_disable_and_restore_default_volts(svsp, svsb);
+			continue;
+		}
+
+		any_ok = true;
+	}
+
+	return any_ok ? 0 : -EIO;
+}
+
+static int svs_mt6893_read_atag_devinfo(struct svs_platform *svsp)
+{
+	const size_t min_bytes = (MT6893_ATAG_DEVINFO_HDR_WORDS +
+				  MT6893_ATAG_DEVINFO_MIN_SIZE) * sizeof(u32);
+	struct device_node *chosen;
+	const u8 *prop;
+	int prop_len = 0;
+	u32 data_size, i;
+
+	chosen = of_find_node_by_path("/chosen");
+	if (!chosen)
+		chosen = of_find_node_by_path("/chosen@0");
+	if (!chosen) {
+		dev_err(svsp->dev, "cannot find /chosen node for atag,devinfo\n");
+		return -ENODEV;
+	}
+
+	if (of_property_read_bool(chosen, "chopin,devinfo-static")) {
+		dev_warn(svsp->dev,
+			 "static fallback /chosen/atag,devinfo detected (no live LK efuse); skipping SVS undervolting\n");
+		of_node_put(chosen);
+		return -ENODEV;
+	}
+
+	prop = of_get_property(chosen, "atag,devinfo", &prop_len);
+	if (!prop || prop_len < min_bytes) {
+		dev_err(svsp->dev, "missing or truncated /chosen/atag,devinfo (len=%d)\n",
+			prop_len);
+		of_node_put(chosen);
+		return -ENODATA;
+	}
+
+	data_size = get_unaligned_le32(prop);
+	if (data_size < MT6893_ATAG_DEVINFO_MIN_SIZE) {
+		dev_err(svsp->dev, "atag,devinfo word count too small: %u\n",
+			data_size);
+		of_node_put(chosen);
+		return -EINVAL;
+	}
+
+	svsp->efuse = kcalloc(MT6893_EFUSE_TOTAL_WORDS, sizeof(u32), GFP_KERNEL);
+	if (!svsp->efuse) {
+		of_node_put(chosen);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < MT6893_ATAG_DEVINFO_EEM_WORDS; i++)
+		svsp->efuse[i] = get_unaligned_le32(prop +
+			(MT6893_ATAG_DEVINFO_HDR_WORDS +
+			 MT6893_ATAG_DEVINFO_EEM_START + i) * sizeof(u32));
+
+	svsp->efuse[MT6893_EFUSE_SEG_SLOT] = get_unaligned_le32(prop +
+		(MT6893_ATAG_DEVINFO_HDR_WORDS +
+		 MT6893_ATAG_DEVINFO_SEG_IDX) * sizeof(u32));
+	svsp->efuse_max = MT6893_EFUSE_TOTAL_WORDS;
+
+	of_node_put(chosen);
+
+	return 0;
+}
+
+static bool svs_mt6893_efuse_parsing(struct svs_platform *svsp,
+				     const struct svs_platform_data *pdata)
+{
+	u32 ft_pgm, ft_bin, seg;
+
+	if (!svsp->efuse || svsp->efuse_max < MT6893_EFUSE_TOTAL_WORDS)
+		return false;
+
+	if (!svsp->efuse[1]) {
+		dev_err(svsp->dev, "uncalibrated MT6893 SVS efuse (RES1=0)\n");
+		return false;
+	}
+
+	ft_pgm = svsp->efuse[0] & GENMASK(7, 0);
+	ft_bin = (svsp->efuse[0] >> 8) & GENMASK(3, 0);
+	seg = svsp->efuse[MT6893_EFUSE_SEG_SLOT] & GENMASK(7, 0);
+
+	dev_info(svsp->dev, "MT6893 EEM efuse: FT_PGM=%u FT_BIN=%u seg=0x%02x\n",
+		 ft_pgm, ft_bin, seg);
+
+	if (ft_pgm < 2) {
+		dev_warn(svsp->dev, "unsupported MT6893 FT_PGM=%u (< 2), disabling SVS\n",
+			 ft_pgm);
+		return false;
+	}
+
+	return true;
+}
+
+static struct device *svs_add_device_link_by_compat(struct svs_platform *svsp,
+						    const char *compat)
+{
+	struct device_node *np;
+	struct platform_device *pdev;
+	struct device_link *sup_link;
+
+	np = of_find_compatible_node(NULL, NULL, compat);
+	if (!np) {
+		dev_err(svsp->dev, "cannot find compatible %s\n", compat);
+		return ERR_PTR(-ENODEV);
+	}
+
+	pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!pdev)
+		return ERR_PTR(-EPROBE_DEFER);
+
+	sup_link = device_link_add(svsp->dev, &pdev->dev,
+				   DL_FLAG_AUTOREMOVE_CONSUMER);
+	if (!sup_link) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-EINVAL);
+	}
+
+	if (sup_link->supplier->links.status != DL_DEV_DRIVER_BOUND) {
+		put_device(&pdev->dev);
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	return &pdev->dev;
+}
+
+static int svs_mt6893_platform_probe(struct svs_platform *svsp)
+{
+	struct device *dev;
+	u32 idx;
+	int ret;
+
+	svsp->rst = devm_reset_control_get_optional(svsp->dev, "svs_rst");
+	if (IS_ERR(svsp->rst))
+		return dev_err_probe(svsp->dev, PTR_ERR(svsp->rst),
+				     "cannot get svs reset control\n");
+
+	dev = svs_add_device_link_by_compat(svsp, "mediatek,mt6893-lvts-mcu");
+	if (IS_ERR(dev))
+		return dev_err_probe(svsp->dev, PTR_ERR(dev),
+				     "failed to link mt6893-lvts-mcu\n");
+	put_device(dev);
+
+	for (idx = 0; idx < svsp->bank_max; idx++) {
+		struct svs_bank *svsb = &svsp->banks[idx];
+		const struct svs_bank_pdata *bdata = &svsb->pdata;
+
+		switch (bdata->sw_id) {
+		case SVSB_SWID_CPU_LITTLE:
+		case SVSB_SWID_CPU_BIG:
+			svsb->opp_dev = get_cpu_device(bdata->cpu_id);
+			if (!svsb->opp_dev)
+				return -EPROBE_DEFER;
+			get_device(svsb->opp_dev);
+			break;
+		case SVSB_SWID_CCI:
+			svsb->opp_dev = svs_add_device_link(svsp, "cci");
+			break;
+		default:
+			dev_err(svsp->dev, "unknown sw_id: %u\n", bdata->sw_id);
+			return -EINVAL;
+		}
+
+		if (IS_ERR(svsb->opp_dev))
+			return dev_err_probe(svsp->dev, PTR_ERR(svsb->opp_dev),
+					     "failed to get OPP device for bank %u\n",
+					     idx);
+
+		ret = devm_add_action_or_reset(svsp->dev, svs_put_device,
+					       svsb->opp_dev);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static struct svs_bank svs_mt6893_banks[] = {
+	{
+		.pdata = (const struct svs_bank_pdata) {
+			.sw_id			= SVSB_SWID_CPU_LITTLE,
+			.cpu_id			= 0,
+			.tzone_name		= "cpu-little0",
+			.opp_count		= MAX_OPP_ENTRIES,
+			.volt_step		= 6250,
+			.volt_base		= 400000,
+			.age_config		= 0x555555,
+			.dc_config		= 0x1,
+			.vco			= 0x10,
+			.chk_shift		= 0x87,
+			.int_st			= BIT(0),
+			.ctl0			= 0xba98000f,
+		},
+		.mode_support	= SVSB_MODE_INIT02,
+		.freq_base	= 1000000000,
+		.core_sel	= 0x0fff0100,
+		.dvt_fixed	= 0x6,
+		.vmax		= 0x99,
+		.vmin		= MT6893_SVS_VMIN_SAFE,
+	},
+	{
+		.pdata = (const struct svs_bank_pdata) {
+			.sw_id			= SVSB_SWID_CPU_BIG,
+			.cpu_id			= 4,
+			.tzone_name		= "cpu-big0",
+			.opp_count		= MAX_OPP_ENTRIES,
+			.volt_step		= 6250,
+			.volt_base		= 400000,
+			.age_config		= 0x555555,
+			.dc_config		= 0x1,
+			.vco			= 0x10,
+			.chk_shift		= 0x87,
+			.int_st			= BIT(1),
+			.ctl0			= 0x05400007,
+		},
+		.mode_support	= SVSB_MODE_INIT02,
+		.freq_base	= 2600000000,
+		.core_sel	= 0x0fff0101,
+		.dvt_fixed	= 0x6,
+		.vmax		= 0x99,
+		.vmin		= MT6893_SVS_VMIN_SAFE,
+	},
+	{
+		.pdata = (const struct svs_bank_pdata) {
+			.sw_id			= SVSB_SWID_CCI,
+			.tzone_name		= "cpu-little0",
+			.opp_count		= MAX_OPP_ENTRIES,
+			.volt_step		= 6250,
+			.volt_base		= 400000,
+			.age_config		= 0x555555,
+			.dc_config		= 0x1,
+			.vco			= 0x10,
+			.chk_shift		= 0x87,
+			.int_st			= BIT(3),
+			.ctl0			= 0xba98000f,
+		},
+		.mode_support	= SVSB_MODE_INIT02,
+		.freq_base	= 1000000000,
+		.core_sel	= 0x0fff0103,
+		.dvt_fixed	= 0x6,
+		.vmax		= 0x99,
+		.vmin		= MT6893_SVS_VMIN_SAFE,
+	},
+};
+
 static struct svs_bank svs_mt8195_banks[] = {
 	{
 		.pdata = (const struct svs_bank_pdata) {
@@ -2826,7 +3533,19 @@ static const struct svs_platform_data svs_mt8183_platform_data = {
 	}
 };
 
+static const struct svs_platform_data svs_mt6893_platform_data = {
+	.name = "mt6893-svs",
+	.banks = svs_mt6893_banks,
+	.efuse_parsing = svs_mt6893_efuse_parsing,
+	.probe = svs_mt6893_platform_probe,
+	.regs = svs_regs_v2,
+	.bank_max = ARRAY_SIZE(svs_mt6893_banks),
+	.use_atag_devinfo = true,
+	.segmented_init02 = true,
+};
+
 static const struct of_device_id svs_of_match[] = {
+	{ .compatible = "mediatek,mt6893-svs", .data = &svs_mt6893_platform_data },
 	{ .compatible = "mediatek,mt8195-svs", .data = &svs_mt8195_platform_data },
 	{ .compatible = "mediatek,mt8192-svs", .data = &svs_mt8192_platform_data },
 	{ .compatible = "mediatek,mt8188-svs", .data = &svs_mt8188_platform_data },
@@ -2853,21 +3572,36 @@ static int svs_probe(struct platform_device *pdev)
 	svsp->regs = svsp_data->regs;
 	svsp->bank_max = svsp_data->bank_max;
 	svsp->ts_coeff = svsp_data->ts_coeff;
+	svsp->use_atag_devinfo = svsp_data->use_atag_devinfo;
+	svsp->segmented_init02 = svsp_data->segmented_init02;
+	init_completion(&svsp->seg_completion);
 
 	ret = svsp_data->probe(svsp);
 	if (ret)
 		return ret;
 
-	ret = svs_get_efuse_data(svsp, "svs-calibration-data",
-				 &svsp->efuse, &svsp->efuse_max);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "Cannot read SVS calibration\n");
+	if (svsp->use_atag_devinfo) {
+		ret = svs_mt6893_read_atag_devinfo(svsp);
+		if (ret) {
+			if (ret == -ENODEV)
+				return -ENODEV;
+			return dev_err_probe(&pdev->dev, ret,
+					     "Cannot read SVS atag,devinfo\n");
+		}
+	} else {
+		ret = svs_get_efuse_data(svsp, "svs-calibration-data",
+					 &svsp->efuse, &svsp->efuse_max);
+		if (ret)
+			return dev_err_probe(&pdev->dev, ret,
+					     "Cannot read SVS calibration\n");
 
-	ret = svs_get_efuse_data(svsp, "t-calibration-data",
-				 &svsp->tefuse, &svsp->tefuse_max);
-	if (ret) {
-		dev_err_probe(&pdev->dev, ret, "Cannot read SVS-Thermal calibration\n");
-		goto svs_probe_free_efuse;
+		ret = svs_get_efuse_data(svsp, "t-calibration-data",
+					 &svsp->tefuse, &svsp->tefuse_max);
+		if (ret) {
+			dev_err_probe(&pdev->dev, ret,
+				      "Cannot read SVS-Thermal calibration\n");
+			goto svs_probe_free_efuse;
+		}
 	}
 
 	if (!svsp_data->efuse_parsing(svsp, svsp_data)) {
