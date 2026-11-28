@@ -10,6 +10,7 @@
 /dts-v1/;
 
 #include <dt-bindings/thermal/mediatek,lvts-thermal.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	cpus {
@@ -22,6 +23,12 @@
 			reg = <0x0>;
 			enable-method = "psci";
 			clock-frequency = <0x65633340>;
+			clocks = <&mcusys 0>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_7_vbuck3>;
+			sram-supply = <&mt_pmic_vsram_proc2_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_ll>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x05 0x06 0x07 0x08>;
 			phandle = <0x0b>;
 		};
@@ -32,6 +39,12 @@
 			reg = <0x100>;
 			enable-method = "psci";
 			clock-frequency = <0x65633340>;
+			clocks = <&mcusys 0>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_7_vbuck3>;
+			sram-supply = <&mt_pmic_vsram_proc2_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_ll>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x05 0x06 0x07 0x08>;
 			phandle = <0x0c>;
 		};
@@ -42,6 +55,12 @@
 			reg = <0x200>;
 			enable-method = "psci";
 			clock-frequency = <0x65633340>;
+			clocks = <&mcusys 0>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_7_vbuck3>;
+			sram-supply = <&mt_pmic_vsram_proc2_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_ll>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x05 0x06 0x07 0x08>;
 			phandle = <0x0d>;
 		};
@@ -52,6 +71,12 @@
 			reg = <0x300>;
 			enable-method = "psci";
 			clock-frequency = <0x65633340>;
+			clocks = <&mcusys 0>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_7_vbuck3>;
+			sram-supply = <&mt_pmic_vsram_proc2_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_ll>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x05 0x06 0x07 0x08>;
 			phandle = <0x0e>;
 		};
@@ -62,6 +87,12 @@
 			reg = <0x400>;
 			enable-method = "psci";
 			clock-frequency = <0x8166d4c0>;
+			clocks = <&mcusys 1>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_6_vbuck1>;
+			sram-supply = <&mt_pmic_vsram_proc1_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_bl>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x09 0x0a 0x07 0x08>;
 			phandle = <0x0f>;
 		};
@@ -72,6 +103,12 @@
 			reg = <0x500>;
 			enable-method = "psci";
 			clock-frequency = <0x8166d4c0>;
+			clocks = <&mcusys 1>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_6_vbuck1>;
+			sram-supply = <&mt_pmic_vsram_proc1_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_bl>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x09 0x0a 0x07 0x08>;
 			phandle = <0x10>;
 		};
@@ -82,6 +119,12 @@
 			reg = <0x600>;
 			enable-method = "psci";
 			clock-frequency = <0x8166d4c0>;
+			clocks = <&mcusys 1>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_6_vbuck1>;
+			sram-supply = <&mt_pmic_vsram_proc1_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_bl>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x09 0x0a 0x07 0x08>;
 			phandle = <0x11>;
 		};
@@ -92,6 +135,12 @@
 			reg = <0x700>;
 			enable-method = "psci";
 			clock-frequency = <0x8166d4c0>;
+			clocks = <&mcusys 1>, <&clk26m>;
+			clock-names = "cpu", "intermediate";
+			proc-supply = <&mt6315_6_vbuck1>;
+			sram-supply = <&mt_pmic_vsram_proc1_ldo_reg>;
+			operating-points-v2 = <&cpu_opp_table_bl>;
+			#cooling-cells = <2>;
 			cpu-idle-states = <0x09 0x0a 0x07 0x08>;
 			phandle = <0x12>;
 		};
@@ -1698,6 +1747,19 @@
 		#clock-cells = <0x01>;
 		phandle = <0x9f>;
 	};
+	mcusys: syscon@c53a000 {
+		compatible = "mediatek,mt6893-mcucfg", "syscon";
+		reg = <0x0 0x0c53a000 0x0 0x1000>;
+		#clock-cells = <1>;
+		mediatek,apmixedsys = <&apmixed>;
+		clocks = <&clk26m>,
+			 <&apmixed 0>,
+			 <&apmixed 5>,
+			 <&apmixed 6>,
+			 <&apmixed 7>;
+		clock-names = "clk26m", "armpll_ll", "ccipll", "mainpll", "univpll";
+		phandle = <0xfa>;
+	};
 	fhctl-new@1000ce00 {
 		compatible = "mediatek,mt6885-fhctl";
 		reg = <0x0 0x1000ce00 0x0 0x200 0x0 0x1000c000 0x0 0xe00>;
@@ -2004,6 +2066,8 @@
 					regulator-min-microvolt = <0x7a120>;
 					regulator-max-microvolt = <0x13bdb6>;
 					regulator-enable-ramp-delay = <0xf0>;
+					regulator-ramp-delay = <6250>;
+					regulator-always-on;
 					phandle = <0x118>;
 				};
 
@@ -2210,6 +2274,8 @@
 					regulator-min-microvolt = <0x7a120>;
 					regulator-max-microvolt = <0x13bdb6>;
 					regulator-enable-ramp-delay = <0xf0>;
+					regulator-ramp-delay = <6250>;
+					regulator-always-on;
 					phandle = <0x12e>;
 				};
 
@@ -5887,6 +5953,7 @@
 					regulator-min-microvolt = <300000>;
 					regulator-max-microvolt = <1193750>;
 					regulator-enable-ramp-delay = <256>;
+					regulator-ramp-delay = <6250>;
 					regulator-always-on;
 					phandle = <0x6e>;
 				};
@@ -5913,6 +5980,7 @@
 					regulator-min-microvolt = <300000>;
 					regulator-max-microvolt = <1193750>;
 					regulator-enable-ramp-delay = <256>;
+					regulator-ramp-delay = <6250>;
 					regulator-always-on;
 					phandle = <0x6f>;
 				};
@@ -6226,52 +6294,323 @@
 		clock-names = "apb", "smi", "async", "gals0", "gals1";
 		phandle = <0x288>;
 	};
+	cpu_opp_table_ll: opp-table-ll {
+		compatible = "operating-points-v2";
+		opp-shared;
+		phandle = <0x302>;
+
+		opp-1075000000 {
+			opp-hz = /bits/ 64 <1075000000>;
+			opp-microvolt = <768750>;
+		};
+
+		opp-1250000000 {
+			opp-hz = /bits/ 64 <1250000000>;
+			opp-microvolt = <812500>;
+		};
+
+		opp-1350000000 {
+			opp-hz = /bits/ 64 <1350000000>;
+			opp-microvolt = <837500>;
+		};
+
+		opp-1450000000 {
+			opp-hz = /bits/ 64 <1450000000>;
+			opp-microvolt = <862500>;
+		};
+
+		opp-1525000000 {
+			opp-hz = /bits/ 64 <1525000000>;
+			opp-microvolt = <881250>;
+		};
+
+		opp-1625000000 {
+			opp-hz = /bits/ 64 <1625000000>;
+			opp-microvolt = <906250>;
+		};
+
+		opp-1725000000 {
+			opp-hz = /bits/ 64 <1725000000>;
+			opp-microvolt = <931250>;
+		};
+
+		opp-1800000000 {
+			opp-hz = /bits/ 64 <1800000000>;
+			opp-microvolt = <950000>;
+		};
+
+		opp-2000000000 {
+			opp-hz = /bits/ 64 <2000000000>;
+			opp-microvolt = <1000000>;
+		};
+	};
+	cpu_opp_table_bl: opp-table-bl {
+		compatible = "operating-points-v2";
+		opp-shared;
+		phandle = <0x303>;
+
+		opp-437000000 {
+			opp-hz = /bits/ 64 <437000000>;
+			opp-microvolt = <650000>;
+		};
+
+		opp-700000000 {
+			opp-hz = /bits/ 64 <700000000>;
+			opp-microvolt = <650000>;
+		};
+
+		opp-902000000 {
+			opp-hz = /bits/ 64 <902000000>;
+			opp-microvolt = <693750>;
+		};
+
+		opp-1046000000 {
+			opp-hz = /bits/ 64 <1046000000>;
+			opp-microvolt = <725000>;
+		};
+
+		opp-1162000000 {
+			opp-hz = /bits/ 64 <1162000000>;
+			opp-microvolt = <750000>;
+		};
+
+		opp-1335000000 {
+			opp-hz = /bits/ 64 <1335000000>;
+			opp-microvolt = <787500>;
+		};
+
+		opp-1451000000 {
+			opp-hz = /bits/ 64 <1451000000>;
+			opp-microvolt = <812500>;
+		};
+
+		opp-1537000000 {
+			opp-hz = /bits/ 64 <1537000000>;
+			opp-microvolt = <831250>;
+		};
+
+		opp-1624000000 {
+			opp-hz = /bits/ 64 <1624000000>;
+			opp-microvolt = <843750>;
+		};
+
+		opp-1740000000 {
+			opp-hz = /bits/ 64 <1740000000>;
+			opp-microvolt = <868750>;
+		};
+
+		opp-1855000000 {
+			opp-hz = /bits/ 64 <1855000000>;
+			opp-microvolt = <893750>;
+		};
+
+		opp-1985000000 {
+			opp-hz = /bits/ 64 <1985000000>;
+			opp-microvolt = <918750>;
+		};
+
+		opp-2200000000 {
+			opp-hz = /bits/ 64 <2200000000>;
+			opp-microvolt = <968750>;
+		};
+
+		opp-2354000000 {
+			opp-hz = /bits/ 64 <2354000000>;
+			opp-microvolt = <1000000>;
+		};
+
+		opp-2507000000 {
+			opp-hz = /bits/ 64 <2507000000>;
+			opp-microvolt = <1031250>;
+		};
+
+		opp-2600000000 {
+			opp-hz = /bits/ 64 <2600000000>;
+			opp-microvolt = <1050000>;
+		};
+	};
 	thermal_zones: thermal-zones {
 		cpu-big0-thermal {
-			polling-delay-passive = <250>;
+			polling-delay-passive = <100>;
 			polling-delay = <1000>;
 			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU0>;
 
 			trips {
+				cpu_big0_alert: trip-alert {
+					temperature = <82000>;
+					hysteresis = <10000>;
+					type = "passive";
+					phandle = <0x320>;
+				};
+
+				cpu_big0_hot_passive: trip-hot-passive {
+					temperature = <90000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x324>;
+				};
+
+				cpu_big0_max_passive: trip-max-passive {
+					temperature = <96000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x328>;
+				};
 			};
 
 			cooling-maps {
+				map0 {
+					trip = <&cpu_big0_alert>;
+					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&cpu_big0_hot_passive>;
+					cooling-device = <&cpu4 5 THERMAL_NO_LIMIT>;
+				};
+
+				map2 {
+					trip = <&cpu_big0_max_passive>;
+					cooling-device = <&cpu4 9 THERMAL_NO_LIMIT>;
+				};
 			};
 		};
 
 		cpu-big1-thermal {
-			polling-delay-passive = <250>;
+			polling-delay-passive = <100>;
 			polling-delay = <1000>;
 			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU1>;
 
 			trips {
+				cpu_big1_alert: trip-alert {
+					temperature = <82000>;
+					hysteresis = <10000>;
+					type = "passive";
+					phandle = <0x321>;
+				};
+
+				cpu_big1_hot_passive: trip-hot-passive {
+					temperature = <90000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x325>;
+				};
+
+				cpu_big1_max_passive: trip-max-passive {
+					temperature = <96000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x329>;
+				};
 			};
 
 			cooling-maps {
+				map0 {
+					trip = <&cpu_big1_alert>;
+					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&cpu_big1_hot_passive>;
+					cooling-device = <&cpu4 5 THERMAL_NO_LIMIT>;
+				};
+
+				map2 {
+					trip = <&cpu_big1_max_passive>;
+					cooling-device = <&cpu4 9 THERMAL_NO_LIMIT>;
+				};
 			};
 		};
 
 		cpu-big2-thermal {
-			polling-delay-passive = <250>;
+			polling-delay-passive = <100>;
 			polling-delay = <1000>;
 			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU2>;
 
 			trips {
+				cpu_big2_alert: trip-alert {
+					temperature = <82000>;
+					hysteresis = <10000>;
+					type = "passive";
+					phandle = <0x322>;
+				};
+
+				cpu_big2_hot_passive: trip-hot-passive {
+					temperature = <90000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x326>;
+				};
+
+				cpu_big2_max_passive: trip-max-passive {
+					temperature = <96000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x32a>;
+				};
 			};
 
 			cooling-maps {
+				map0 {
+					trip = <&cpu_big2_alert>;
+					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&cpu_big2_hot_passive>;
+					cooling-device = <&cpu4 5 THERMAL_NO_LIMIT>;
+				};
+
+				map2 {
+					trip = <&cpu_big2_max_passive>;
+					cooling-device = <&cpu4 9 THERMAL_NO_LIMIT>;
+				};
 			};
 		};
 
 		cpu-big3-thermal {
-			polling-delay-passive = <250>;
+			polling-delay-passive = <100>;
 			polling-delay = <1000>;
 			thermal-sensors = <&lvts_mcu MT6893_MCU_BIG_CPU3>;
 
 			trips {
+				cpu_big3_alert: trip-alert {
+					temperature = <82000>;
+					hysteresis = <10000>;
+					type = "passive";
+					phandle = <0x323>;
+				};
+
+				cpu_big3_hot_passive: trip-hot-passive {
+					temperature = <90000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x327>;
+				};
+
+				cpu_big3_max_passive: trip-max-passive {
+					temperature = <96000>;
+					hysteresis = <5000>;
+					type = "passive";
+					phandle = <0x32b>;
+				};
 			};
 
 			cooling-maps {
+				map0 {
+					trip = <&cpu_big3_alert>;
+					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&cpu_big3_hot_passive>;
+					cooling-device = <&cpu4 5 THERMAL_NO_LIMIT>;
+				};
+
+				map2 {
+					trip = <&cpu_big3_max_passive>;
+					cooling-device = <&cpu4 9 THERMAL_NO_LIMIT>;
+				};
 			};
 		};
 

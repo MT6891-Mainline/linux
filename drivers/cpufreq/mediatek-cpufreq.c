@@ -624,6 +624,7 @@ static struct cpufreq_driver mtk_cpufreq_driver = {
 	.init = mtk_cpufreq_init,
 	.exit = mtk_cpufreq_exit,
 	.register_em = cpufreq_register_em_with_opp,
+	.set_boost = cpufreq_boost_set_sw,
 	.name = "mtk-cpufreq",
 };
 
@@ -680,6 +681,15 @@ static struct platform_driver mtk_cpufreq_platdrv = {
 		.name	= "mtk-cpufreq",
 	},
 	.probe		= mtk_cpufreq_probe,
+};
+
+static const struct mtk_cpufreq_platform_data mt6893_platform_data = {
+	.min_volt_shift = 100000,
+	.max_volt_shift = 250000,
+	.proc_max_volt = 1050000,
+	.sram_min_volt = 850000,
+	.sram_max_volt = 1118750,
+	.ccifreq_supported = false,
 };
 
 static const struct mtk_cpufreq_platform_data mt2701_platform_data = {
@@ -747,6 +757,8 @@ static const struct mtk_cpufreq_platform_data mt8516_platform_data = {
 static const struct of_device_id mtk_cpufreq_machines[] __initconst __maybe_unused = {
 	{ .compatible = "mediatek,mt2701", .data = &mt2701_platform_data },
 	{ .compatible = "mediatek,mt2712", .data = &mt2701_platform_data },
+	{ .compatible = "mediatek,mt6893", .data = &mt6893_platform_data },
+	{ .compatible = "mediatek,MT6893", .data = &mt6893_platform_data },
 	{ .compatible = "mediatek,mt7622", .data = &mt7622_platform_data },
 	{ .compatible = "mediatek,mt7623", .data = &mt7623_platform_data },
 	{ .compatible = "mediatek,mt7988a", .data = &mt7988_platform_data },
